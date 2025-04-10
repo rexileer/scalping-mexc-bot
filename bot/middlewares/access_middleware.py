@@ -6,18 +6,8 @@ from users.models import User
 from subscriptions.models import Subscription, BotMessageForSubscription
 from datetime import datetime, timezone
 from django.db.utils import OperationalError
+from bot.constants import DEFAULT_PAYMENT_MESSAGE
 
-# Настройки оплаты (можно потом в settings вытащить)
-PAYMENT_WALLET = "TY43ubA82J5mrViFwAsNpNLkNLaj2rvx1Z"
-PAYMENT_NETWORK = "TRC20"
-
-DEFAULT_PAYMENT_MESSAGE = (
-    f"🔒 Для получения доступа к боту:\n\n"
-    f"1️⃣ Оплатите 100 USDT в сети {PAYMENT_NETWORK} на кошелёк:\n"
-    f"<code>{PAYMENT_WALLET}</code>\n\n"
-    f"2️⃣ После оплаты отправьте скриншот и TXID в ЛС 👉 @ScalpingBotSupport\n\n"
-    f"Перед оплатой рекомендуем нажать /start для актуализации информации."
-)
 
 class AccessMiddleware(BaseMiddleware):
     async def __call__(
