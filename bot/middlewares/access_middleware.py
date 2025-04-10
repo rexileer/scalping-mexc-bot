@@ -3,14 +3,15 @@ from aiogram import BaseMiddleware
 from typing import Callable, Dict, Any, Awaitable
 from bot.logger import logger
 from users.models import User 
-from subscriptions.models import Subscription
+from subscriptions.models import Subscription, BotMessageForSubscription
 from datetime import datetime, timezone
+from django.db.utils import OperationalError
 
 # Настройки оплаты (можно потом в settings вытащить)
 PAYMENT_WALLET = "TY43ubA82J5mrViFwAsNpNLkNLaj2rvx1Z"
 PAYMENT_NETWORK = "TRC20"
 
-PAYMENT_MESSAGE = (
+DEFAULT_PAYMENT_MESSAGE = (
     f"🔒 Для получения доступа к боту:\n\n"
     f"1️⃣ Оплатите 100 USDT в сети {PAYMENT_NETWORK} на кошелёк:\n"
     f"<code>{PAYMENT_WALLET}</code>\n\n"
@@ -53,7 +54,18 @@ class AccessMiddleware(BaseMiddleware):
 
             # Нет подписки — выводим сообщение
             if not subscription:
-                await message.answer(PAYMENT_MESSAGE, parse_mode="HTML")
+                # Пробуем получить кастомное сообщение из базы
+                try:
+                    custom_message = await BotMessageForSubscription.objects.afirst()
+                    text_to_send = custom_message.text if custom_message else DEFAULT_PAYMENT_MESSAGE
+                except OperationalError:
+                    # База ещё не готова, или миграции не применены
+                    text_to_send = DEFAULT_PAYMENT_MESSAGE
+                except Exception as e:
+                    logger.error(f"Error while fetching subscription message: {e}")
+                    text_to_send = DEFAULT_PAYMENT_MESSAGE
+
+                await message.answer(text_to_send, parse_mode="HTML")
                 return
 
         return await handler(event, data)

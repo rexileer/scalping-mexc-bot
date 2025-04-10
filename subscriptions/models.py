@@ -11,3 +11,15 @@ class Subscription(models.Model):
     class Meta:
         verbose_name = 'Подписка'
         verbose_name_plural = 'Подписки'
+
+class BotMessageForSubscription(models.Model):
+    text = models.TextField()
+    
+    def save(self, *args, **kwargs):
+        if BotMessageForSubscription.objects.exists():
+            # Разрешаем обновлять только первую запись
+            self.pk = BotMessageForSubscription.objects.first().pk
+        super().save(*args, **kwargs)
+        
+    def __str__(self):
+        return "Сообщение пользователям для оформления подписки"
