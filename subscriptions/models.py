@@ -7,3 +7,7 @@ class Subscription(models.Model):
 
     def __str__(self):
         return f"{self.telegram_id} — до {self.expires_at}"
+    
+    class Meta:
+        verbose_name = 'Подписка'
+        verbose_name_plural = 'Подписки'
