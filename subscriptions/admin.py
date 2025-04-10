@@ -10,6 +10,3 @@ class SubscriptionAdmin(admin.ModelAdmin):
 class BotMessageForSubscriptionAdmin(admin.ModelAdmin):
     def has_add_permission(self, request):
         return not BotMessageForSubscription.objects.exists()  # Разрешаем добавлять, только если нет записей
-
-    def has_delete_permission(self, request, obj=None):
-        return False  # Запрещаем удаление
