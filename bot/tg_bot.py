@@ -19,6 +19,7 @@ from bot.config import load_config
 from bot.logger import logger
 from bot.routers import setup_routers
 from bot.middlewares.access_middleware import AccessMiddleware
+from bot.utils.set_commands import set_default_commands
 
 config = load_config()
 
@@ -33,6 +34,8 @@ async def main():
 
         dp.include_router(setup_routers())
         dp.update.middleware(AccessMiddleware())
+        
+        await set_default_commands(bot)
 
         logger.info("Bot started")
         await asyncio.gather(
