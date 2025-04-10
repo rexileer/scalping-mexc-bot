@@ -3,6 +3,8 @@ from aiogram import BaseMiddleware
 from typing import Callable, Dict, Any, Awaitable
 from bot.logger import logger
 from users.models import User 
+from subscriptions.models import Subscription
+from datetime import datetime, timezone
 
 # Настройки оплаты (можно потом в settings вытащить)
 PAYMENT_WALLET = "TY43ubA82J5mrViFwAsNpNLkNLaj2rvx1Z"
@@ -25,16 +27,33 @@ class AccessMiddleware(BaseMiddleware):
     ) -> Any:
         message = event.message
 
-        if message:  # Только если это сообщение
+        if message:
             telegram_user = message.from_user
-            try:
-                user_exists = await User.objects.filter(telegram_id=telegram_user.id).aexists()
-            except Exception as e:
-                logger.error(f"DB error while checking user access: {e}")
-                user_exists = False
 
-            if not user_exists:
+            try:
+                # Добавление юзера, если нет
+                user, _ = await User.objects.aget_or_create(
+                    telegram_id=telegram_user.id,
+                    defaults={"name": telegram_user.username or ""}
+                )
+            except Exception as e:
+                logger.error(f"DB error while checking/creating user: {e}")
+                return  # Лучше блокировать, чем продолжать с ошибкой
+
+            # Проверка подписки
+            now = datetime.now(timezone.utc)
+            try:
+                subscription = await Subscription.objects.filter(
+                    telegram_id=telegram_user.id,
+                    expires_at__gte=now
+                ).afirst()
+            except Exception as e:
+                logger.error(f"DB error while checking subscription: {e}")
+                subscription = None
+
+            # Нет подписки — выводим сообщение
+            if not subscription:
                 await message.answer(PAYMENT_MESSAGE, parse_mode="HTML")
-                return  # Блокируем обработку дальше
+                return
 
         return await handler(event, data)
