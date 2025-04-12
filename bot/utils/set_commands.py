@@ -14,6 +14,6 @@ async def set_default_commands(bot: Bot):
         BotCommand(command="/pair", description="Торговая пара"),
         BotCommand(command="/subscription", description="Подписка"),
         BotCommand(command="/stats", description="Статистика"),
-        BotCommand(command="/auth", description="Авторизация"),
+        BotCommand(command="/set_keys", description="Авторизация MEXC/Установка ключей"),
     ]
     await bot.set_my_commands(commands)
