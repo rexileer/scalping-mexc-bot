@@ -1,8 +1,8 @@
 from django.db import models
 
-
 class FAQ(models.Model):
-    text = models.TextField("Текст сообщения", blank=True, null=True)
+    question = models.TextField("Вопрос", blank=True, null=True)
+    answer = models.TextField("Ответ", blank=True, null=True)
     file = models.FileField("Медиафайл", upload_to="media/", blank=True, null=True)
     media_type = models.CharField(
         "Тип медиафайла",
@@ -13,9 +13,7 @@ class FAQ(models.Model):
     )
 
     def __str__(self):
-        if self.text:
-            return self.text[:50]
-        return f"FAQ: {self.id}"
+        return self.question[:50] if self.question else f"FAQ: {self.id}"
 
     class Meta:
         verbose_name = 'Вопрос-ответ'

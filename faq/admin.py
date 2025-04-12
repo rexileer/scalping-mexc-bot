@@ -6,7 +6,7 @@ from django.db import models
 
 @admin.register(FAQ)
 class FAQAdmin(admin.ModelAdmin):
-    list_display = ("id", "media_display")
+    list_display = ("id","question", "media_display")
     readonly_fields = ("media_preview",)
 
     formfield_overrides = {
