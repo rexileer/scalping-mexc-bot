@@ -62,8 +62,8 @@ async def handle_stats_callback(callback_query: CallbackQuery):
             stats_message += (
                 f"\n🧾 <b>{deal.order_id}</b>\n"
                 f"{amount:.4f} {user.pair[:-4]}\n"
-                f"🔹 Куплено: {buy_price:.5f} ({total_buy:.2f} USDT)\n"
-                f"🔸 Продано: {sell_price:.5f} ({total_sell:.2f} USDT)\n"
+                f"🔹 Куплено по: {buy_price:.5f} ({total_buy:.2f} USDT)\n"
+                f"🔸 Продано по: {sell_price:.5f} ({total_sell:.2f} USDT)\n"
                 f"📊 Прибыль: {profit:.2f} USDT ({profit_percent:.2f}%)\n"
                 f"🕒 {(deal.created_at + UTC_OFFSET).strftime('%d.%m.%Y %H:%M:%S')}\n"
             )
@@ -90,6 +90,7 @@ def get_user_and_deals(telegram_id, start_date, end_date):
     deals = Deal.objects.filter(
         user=user,
         created_at__range=[start_date, end_date],
-        sell_price__isnull=False
+        sell_price__isnull=False,
+        status="FILLED"
     ).order_by('created_at')
     return user, deals
