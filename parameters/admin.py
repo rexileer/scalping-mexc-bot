@@ -4,7 +4,7 @@ from django.utils.translation import gettext_lazy as _
 
 @admin.register(BaseParameters)
 class BaseParametersAdmin(admin.ModelAdmin):
-    list_display = ('profit', 'pause', 'loss')
+    list_display = ('profit', 'pause', 'loss', 'buy_amount')
     def has_add_permission(self, request):
         return not BaseParameters.objects.exists()  # Разрешаем добавлять, только если нет записей
 

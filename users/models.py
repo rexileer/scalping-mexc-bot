@@ -12,6 +12,7 @@ class User(models.Model):
     pause = models.IntegerField(null=True, blank=True)
     loss = models.FloatField(null=True, blank=True)
     is_active = models.BooleanField(default=False) 
+    buy_amount = models.DecimalField(max_digits=10, decimal_places=2, default=10.00)
 
 
     def __str__(self):
@@ -30,4 +31,6 @@ class User(models.Model):
                 self.pause = base_params.pause
             if self.loss is None:
                 self.loss = base_params.loss
+            if self.buy_amount is None:
+                self.buy_amount = base_params.buy_amount
             self.save()
