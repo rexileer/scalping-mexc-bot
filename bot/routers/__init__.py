@@ -7,6 +7,7 @@ from bot.commands.subscription import router as subscription_router  # Кома�
 from bot.commands.pair import router as pair_router  # Команда /pair
 from bot.commands.parameters import router as parameters_router  # Команда /parameters
 from bot.commands.trading import router as trading_router # Команды /price, /buy, /auto_buy, /balance, /status, /stats
+from bot.commands.stats import router as stats_router  # stats
 
 def setup_routers() -> Router:
     router = Router()
@@ -19,4 +20,5 @@ def setup_routers() -> Router:
     
     # Роутеры, требующие /pair
     router.include_router(trading_router)
+    router.include_router(stats_router)
     return router

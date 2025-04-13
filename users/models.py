@@ -34,3 +34,17 @@ class User(models.Model):
             if self.buy_amount is None:
                 self.buy_amount = base_params.buy_amount
             self.save()
+
+class Deal(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    order_id = models.CharField(max_length=64)
+    symbol = models.CharField(max_length=20)
+    buy_price = models.DecimalField(max_digits=20, decimal_places=8)  # Стоимость покупки
+    sell_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)  # Стоимость продажи
+    quantity = models.DecimalField(max_digits=20, decimal_places=8)
+    status = models.CharField(max_length=20, default="NEW")  # NEW, FILLED, PARTIALLY_FILLED, etc.
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Order ID: {self.order_id}, Symbol: {self.symbol}, Buy Price: {self.buy_price}, Sell Price: {self.sell_price}, Quantity: {self.quantity}, Status: {self.status}"

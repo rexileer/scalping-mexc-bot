@@ -1,11 +1,12 @@
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.filters import Command
 
 from bot.middlewares.require_pair_middleware import RequirePairMiddleware
 from bot.utils.mexc import get_user_client
-from users.models import User
+from users.models import User, Deal
 from logger import logger
+from bot.keyboards.inline import get_period_keyboard
 
 from mexc_sdk import Trade  # Предполагаем, что именно этот класс отвечает за торговые операции
 
@@ -108,6 +109,16 @@ async def buy_handler(message: Message):
         executed_qty = 100  # заглушка
         avg_price = 120  # заглушка
 
+        # Сохраняем ордер в базе данных как покупку
+        deal = Deal.objects.create(
+            user=user,
+            order_id=buy_order['orderId'],
+            symbol=symbol,
+            buy_price=avg_price,  # Цена покупки
+            quantity=executed_qty,
+            status="FILLED"
+        )
+
         spent = executed_qty * avg_price  # фактически потрачено
 
         # 3. Считаем цену продажи
@@ -120,6 +131,11 @@ async def buy_handler(message: Message):
             "price": f"{sell_price:.6f}",
             "timeInForce": "GTC"
         })
+
+        # Обновляем ордер на продажу в базе данных
+        deal.sell_price = sell_price
+        deal.status = "SELL_ORDER_PLACED"
+        deal.save()
 
         # 5. Формируем красивый ответ
         text = (
@@ -164,14 +180,9 @@ async def status_handler(message: Message):
         logger.error(f"Ошибка при получении статуса для пользователя {message.from_user.id}: {e}")
         await message.answer("Произошла ошибка при получении статуса.")
 
+
 # /stats
 @router.message(Command("stats"))
-async def stats_handler(message: Message):
-    try:
-        user = User.objects.get(telegram_id=message.from_user.id)
-        # Отправляем статистику по покупкам
-        await message.answer(f"📈 Ваша статистика по {user.pair}:\n- Покупок: 5\n- Средняя цена: 120.00 USDT (заглушка)")
-        logger.info(f"User {user.telegram_id} requested stats for {user.pair}.")
-    except Exception as e:
-        logger.error(f"Ошибка при получении статистики для пользователя {message.from_user.id}: {e}")
-        await message.answer("Произошла ошибка при получении статистики.")
+async def ask_stats_period(message: Message):
+    await message.answer("Выберите период для статистики:", reply_markup=get_period_keyboard())
+
