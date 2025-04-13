@@ -40,12 +40,45 @@ async def get_user_price(message: Message):
 async def balance_handler(message: Message):
     try:
         user = User.objects.get(telegram_id=message.from_user.id)
-        # Отправляем баланс пользователя
-        await message.answer(f"💰 Ваш баланс: 1000 USDT (заглушка)")
-        logger.info(f"User {user.telegram_id} requested balance.")
+        client, pair = get_user_client(message.from_user.id)  # Получаем клиента
+
+        # Получаем информацию о аккаунте
+        account_info = client.account_info()
+
+        # Логируем информацию о балансе
+        logger.info(f"Account Info for {message.from_user.id}: {account_info}")
+
+        # Формируем строку с балансами
+        balances_message = "💰 Ваш баланс:\n"
+        for balance in account_info['balances']:
+            asset = balance['asset']
+            free = float(balance['free'])
+            locked = float(balance['locked'])
+
+            if free > 0 or locked > 0:  # Выводим только те валюты, у которых есть средства
+                balances_message += f"\n{asset}\nДоступно: {free:.2f}\nЗаморожено: {locked:.2f}"
+
+        # Получаем информацию о ордерах
+        orders = client.open_orders(symbol=pair)  # Получаем открытые ордера по текущей паре
+
+        # Логируем информацию о ордерах
+        logger.info(f"Open Orders for {message.from_user.id}: {orders}")
+
+        total_order_amount = sum([float(order['origQty']) for order in orders])
+        total_order_value = sum([float(order['price']) * float(order['origQty']) for order in orders])
+        avg_price = total_order_value / total_order_amount if total_order_amount > 0 else 0
+
+        orders_message = f"\n\nОрдера\nКоличество: {total_order_amount:.2f}\nСумма исполнения: {total_order_value:.2f} USDT\nСредняя цена исполнения: {avg_price:.6f} USDT"
+
+        # Отправляем сообщение пользователю
+        await message.answer(balances_message + orders_message)
+
+        logger.info(f"User {user.telegram_id} requested balance and orders.")
+    
     except Exception as e:
         logger.error(f"Ошибка при получении баланса для пользователя {message.from_user.id}: {e}")
         await message.answer("Произошла ошибка при получении баланса.")
+
 
 # /buy
 @router.message(Command("buy"))
