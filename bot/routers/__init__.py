@@ -5,6 +5,7 @@ from bot.commands.set_keys import router as set_keys_router  # Команда /s
 from bot.commands.faq import router as faq_router  # Команда /faq
 from bot.commands.subscription import router as subscription_router  # Команда /subscription
 from bot.commands.pair import router as pair_router  # Команда /pair
+from bot.commands.parameters import router as parameters_router  # Команда /parameters
 
 def setup_routers() -> Router:
     router = Router()
@@ -13,4 +14,5 @@ def setup_routers() -> Router:
     router.include_router(faq_router)
     router.include_router(subscription_router)
     router.include_router(pair_router)
+    router.include_router(parameters_router)
     return router
