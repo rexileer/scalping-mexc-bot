@@ -54,5 +54,7 @@ def save_api_keys(user_id: int, api_key: str, api_secret: str):
             telegram_id=user_id,
             defaults={"api_key": api_key, "api_secret": api_secret}
         )
+        obj.set_default_parameters()
+        obj.save()
     except Exception as e:
         raise Exception(f"Ошибка при сохранении в базу данных: {e}")

@@ -1,5 +1,5 @@
 from django.db import models
-
+from parameters.models import BaseParameters
 
 class User(models.Model):
     name = models.CharField(max_length=255, null=True, blank=True)
@@ -29,3 +29,14 @@ class User(models.Model):
     class Meta:
         verbose_name = 'Пользователь telegram'
         verbose_name_plural = 'Пользователи telegram'
+
+    def set_default_parameters(self):
+        base_params = BaseParameters.objects.first()
+        if base_params:
+            if self.profit is None:
+                self.profit = base_params.profit
+            if self.pause is None:
+                self.pause = base_params.pause
+            if self.loss is None:
+                self.loss = base_params.loss
+            self.save()
