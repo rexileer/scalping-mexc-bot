@@ -10,8 +10,8 @@ router = Router()
 async def pair(message: Message):
     # Создаем инлайн кнопки для двух торговых пар
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="KAS/USDT", callback_data="pair_KAS_USDT")],
-        [InlineKeyboardButton(text="BTC/USDC", callback_data="pair_BTC_USDC")],
+        [InlineKeyboardButton(text="KAS/USDT", callback_data="pair_KASUSDT")],
+        [InlineKeyboardButton(text="BTC/USDC", callback_data="pair_BTCUSDC")],
     ])
 
     # Отправка сообщения с клавиатурой
