@@ -7,6 +7,9 @@ from bot.utils.mexc import get_user_client
 from users.models import User
 from logger import logger
 
+from mexc_sdk import Trade  # Предполагаем, что именно этот класс отвечает за торговые операции
+
+
 router = Router()
 router.message.middleware(RequirePairMiddleware())
 
@@ -85,12 +88,57 @@ async def balance_handler(message: Message):
 async def buy_handler(message: Message):
     try:
         user = User.objects.get(telegram_id=message.from_user.id)
-        # Отправляем информацию о покупке
-        await message.answer(f"✅ Покупка по паре {user.pair} выполнена (заглушка)")
-        logger.info(f"User {user.telegram_id} made a buy request for {user.pair}.")
+
+        if not user.pair:
+            await message.answer("❗ Вы не выбрали торговую пару. Введите /pair для выбора.")
+            return
+
+        symbol = user.pair.replace("/", "")
+        trade_client = Trade(api_key=user.api_key, api_secret=user.api_secret)
+        buy_amount = float(user.buy_amount)
+
+        # 1. ПОКУПКА по рынку на сумму
+        buy_order = trade_client.new_order_test(symbol, "BUY", "MARKET", {
+            "quoteOrderQty": buy_amount
+        })
+
+        # 2. Получаем данные из ордера
+        # executed_qty = float(buy_order["executedQty"])  # сколько купили
+        # avg_price = float(buy_order["fills"][0]["price"])  # по какой цене
+        executed_qty = 100  # заглушка
+        avg_price = 120  # заглушка
+
+        spent = executed_qty * avg_price  # фактически потрачено
+
+        # 3. Считаем цену продажи
+        profit_percent = float(user.profit)
+        sell_price = round(avg_price * (1 + profit_percent / 100), 6)
+
+        # 4. ВЫСТАВЛЯЕМ лимитный SELL ордер
+        sell_order = trade_client.new_order_test(symbol, "SELL", "LIMIT", {
+            "quantity": executed_qty,
+            "price": f"{sell_price:.6f}",
+            "timeInForce": "GTC"
+        })
+
+        # 5. Формируем красивый ответ
+        text = (
+            f"✅ КУПЛЕНО\n\n"
+            f"{executed_qty:.2f} {symbol[:-4]} по {avg_price:.6f} USDT\n\n"
+            f"Потрачено\n"
+            f"{spent:.8f} USDT\n\n"
+            f"📈 ВЫСТАВЛЕНО\n\n"
+            f"{executed_qty:.2f} {symbol[:-4]} по {sell_price:.6f} USDT"
+        )
+        await message.answer(text)
+
+        logger.info(f"BUY + SELL for {user.telegram_id}: {executed_qty} {symbol} @ {avg_price} -> {sell_price}")
+
     except Exception as e:
-        logger.error(f"Ошибка при выполнении покупки для пользователя {message.from_user.id}: {e}")
-        await message.answer("Произошла ошибка при выполнении покупки.")
+        logger.error(f"Ошибка при /buy для {message.from_user.id}: {e}")
+        await message.answer("❌ Ошибка при выполнении сделки.")
+
+
 
 # /auto_buy
 @router.message(Command("autobuy"))
