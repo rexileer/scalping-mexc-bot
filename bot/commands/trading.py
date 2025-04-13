@@ -1,13 +1,14 @@
 from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.filters import Command
-
+import asyncio
+from bot.commands.buy import monitor_order
 from bot.middlewares.require_pair_middleware import RequirePairMiddleware
 from bot.utils.mexc import get_user_client
 from users.models import User, Deal
 from logger import logger
 from bot.keyboards.inline import get_period_keyboard
-
+from asgiref.sync import sync_to_async
 from mexc_sdk import Trade  # Предполагаем, что именно этот класс отвечает за торговые операции
 
 
@@ -104,20 +105,11 @@ async def buy_handler(message: Message):
         })
 
         # 2. Получаем данные из ордера
-        # executed_qty = float(buy_order["executedQty"])  # сколько купили
-        # avg_price = float(buy_order["fills"][0]["price"])  # по какой цене
-        executed_qty = 100  # заглушка
-        avg_price = 120  # заглушка
+        executed_qty = float(buy_order["executedQty"])  # сколько купили
+        avg_price = float(buy_order["fills"][0]["price"])  # по какой цене
+        # executed_qty = 100  # заглушка
+        # avg_price = 120  # заглушка
 
-        # Сохраняем ордер в базе данных как покупку
-        deal = Deal.objects.create(
-            user=user,
-            order_id=buy_order['orderId'],
-            symbol=symbol,
-            buy_price=avg_price,  # Цена покупки
-            quantity=executed_qty,
-            status="FILLED"
-        )
 
         spent = executed_qty * avg_price  # фактически потрачено
 
@@ -131,6 +123,16 @@ async def buy_handler(message: Message):
             "price": f"{sell_price:.6f}",
             "timeInForce": "GTC"
         })
+        # Сохраняем ордер в базе данных как покупку
+        order_id = sell_order['orderId']
+        deal = await sync_to_async(Deal.objects.create)(
+            user=user,
+            order_id=order_id,
+            symbol=symbol,
+            buy_price=avg_price,  # Цена покупки
+            quantity=executed_qty,
+            status="BUY_ORDER_PLACED"
+        )
 
         # Обновляем ордер на продажу в базе данных
         deal.sell_price = sell_price
@@ -149,7 +151,9 @@ async def buy_handler(message: Message):
         await message.answer(text)
 
         logger.info(f"BUY + SELL for {user.telegram_id}: {executed_qty} {symbol} @ {avg_price} -> {sell_price}")
-
+        # 4. Запускаем фоновый мониторинг ордера
+        asyncio.create_task(monitor_order(message, order_id))
+        logger.info(f"Monitoring order {buy_order['orderId']} for user {user.telegram_id}.")
     except Exception as e:
         logger.error(f"Ошибка при /buy для {message.from_user.id}: {e}")
         await message.answer("❌ Ошибка при выполнении сделки.")
