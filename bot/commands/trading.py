@@ -40,44 +40,49 @@ async def get_user_price(message: Message):
         logger.error(f"Произошла ошибка при получении цены: {e}")
         await message.answer("Произошла ошибка при получении цены.")
 
-# /balance
+
+import locale
+# Устанавливаем русскую локаль для форматирования чисел
+locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')  # может не работать на Windows, тогда использовать кастомную функцию
+
 @router.message(Command("balance"))
 async def balance_handler(message: Message):
     try:
         user = User.objects.get(telegram_id=message.from_user.id)
-        client, pair = get_user_client(message.from_user.id)  # Получаем клиента
+        client, pair = get_user_client(message.from_user.id)
 
-        # Получаем информацию о аккаунте
         account_info = client.account_info()
-
-        # Логируем информацию о балансе
         logger.info(f"Account Info for {message.from_user.id}: {account_info}")
 
-        # Формируем строку с балансами
-        balances_message = "💰 Ваш баланс:\n"
+        balances_message = "💰 <b>БАЛАНС</b>\n"
+
         for balance in account_info['balances']:
             asset = balance['asset']
             free = float(balance['free'])
             locked = float(balance['locked'])
 
-            if free > 0 or locked > 0:  # Выводим только те валюты, у которых есть средства
-                balances_message += f"\n{asset}\nДоступно: {free:.2f}\nЗаморожено: {locked:.2f}"
+            if free > 0 or locked > 0:
+                balances_message += (
+                    f"\n<b>{asset}</b>\n"
+                    f"Доступно: {format(free, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}\n"
+                    f"Заморожено: {format(locked, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
+                )
 
-        # Получаем информацию о ордерах
-        orders = client.open_orders(symbol=pair)  # Получаем открытые ордера по текущей паре
-
-        # Логируем информацию о ордерах
+        orders = client.open_orders(symbol=pair)
         logger.info(f"Open Orders for {message.from_user.id}: {orders}")
 
         total_order_amount = sum([float(order['origQty']) for order in orders])
         total_order_value = sum([float(order['price']) * float(order['origQty']) for order in orders])
         avg_price = total_order_value / total_order_amount if total_order_amount > 0 else 0
 
-        orders_message = f"\n\nОрдера\nКоличество: {total_order_amount:.2f}\nСумма исполнения: {total_order_value:.2f} USDT\nСредняя цена исполнения: {avg_price:.6f} USDT"
+        orders_message = (
+            f"\n\n📄 <b>Ордера</b>\n"
+            f"Количество: {format(total_order_amount, ',.0f').replace(',', ' ')}\n"
+            f"Сумма исполнения: {format(total_order_value, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')} USDT\n"
+            f"Средняя цена исполнения: {format(avg_price, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.')} USDT"
+        )
 
-        # Отправляем сообщение пользователю
-        await message.answer(balances_message + orders_message)
-
+        await message.answer(balances_message + orders_message, parse_mode="HTML")
         logger.info(f"User {user.telegram_id} requested balance and orders.")
     
     except Exception as e:
