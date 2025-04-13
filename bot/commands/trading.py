@@ -28,7 +28,7 @@ async def buy_handler(message: Message):
     await message.answer(f"✅ Покупка по паре {user.pair} выполнена (заглушка)")
 
 # /auto_buy
-@router.message(Command("auto_buy"))
+@router.message(Command("autobuy"))
 async def auto_buy_handler(message: Message):
     user = User.objects.get(telegram_id=message.from_user.id)
     await message.answer(f"🤖 Автопокупка по паре {user.pair} активирована (заглушка)")

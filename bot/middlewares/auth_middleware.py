@@ -55,8 +55,6 @@ class AuthMiddleware(BaseMiddleware):
                 await message.answer("Пожалуйста, сначала введите API ключи через /set_keys.")
                 return
 
-            spot = Spot(api_key=user.api_key, api_secret=user.api_secret)
-            spot.ping()
         except Exception as e:
             logger.error(f"Ошибка при проверке API ключей: {e}")
             await message.answer("Неверные API ключи. Пожалуйста, повторите ввод через /set_keys.")
