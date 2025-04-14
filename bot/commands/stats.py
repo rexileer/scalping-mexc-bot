@@ -24,10 +24,7 @@ async def handle_stats_callback(callback_query: CallbackQuery):
     elif data == "month":
         start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     elif data == "all":
-        start_date = datetime(2020, 1, 1, tzinfo=timezone.utc)  # или первая сделка
-    elif data == "custom":
-        await callback_query.message.answer("Введите начальную дату в формате ДД.ММ.ГГГГ")
-        return
+        start_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
     end_date = now
     await callback_query.message.answer("Формирую статистику...")
@@ -36,7 +33,7 @@ async def handle_stats_callback(callback_query: CallbackQuery):
         user_id = callback_query.from_user.id
         user, deals = await get_user_and_deals(user_id, start_date, end_date)
 
-        stats_message = f"📈 Статистика по {user.pair} (с {start_date.strftime('%d.%m.%Y')} по {end_date.strftime('%d.%m.%Y')}):\n"
+        stats_message = f"📈 Статистика (с {start_date.strftime('%d.%m.%Y')} по {end_date.strftime('%d.%m.%Y')}):\n"
 
         if not deals:
             stats_message += "\nНет завершённых продаж за указанный период."
@@ -59,9 +56,10 @@ async def handle_stats_callback(callback_query: CallbackQuery):
             profit_total += profit
             percent_total += profit_percent
 
+            autobuy = "(AutoBuy)" if deal.is_autobuy else ""
             stats_message += (
-                f"\n🧾 <b>{deal.order_id}</b>\n"
-                f"{amount:.4f} {user.pair[:-4]}\n"
+                f"\n🧾 <b>{deal.order_id}</b> {autobuy}\n"
+                f"{amount:.4f} {deal.symbol[:-4]}\n"
                 f"🔹 Куплено по: {buy_price:.5f} ({total_buy:.2f} USDT)\n"
                 f"🔸 Продано по: {sell_price:.5f} ({total_sell:.2f} USDT)\n"
                 f"📊 Прибыль: {profit:.2f} USDT ({profit_percent:.2f}%)\n"
