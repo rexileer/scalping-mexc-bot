@@ -22,3 +22,14 @@ def get_faq_keyboard():
         for faq in faqs
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_buttons)
+
+# Общая клавиатура параметров
+def build_parameters_keyboard(user_params):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"Изменить прибыль (Текущая: {user_params.profit})", callback_data="change_profit")],
+            [InlineKeyboardButton(text=f"Изменить падение (Текущее: {user_params.loss})", callback_data="change_loss")],
+            [InlineKeyboardButton(text=f"Изменить паузу (Текущая: {user_params.pause})", callback_data="change_pause")],
+            [InlineKeyboardButton(text=f"Изменить сумму покупки (Текущая: {user_params.buy_amount})", callback_data="change_buy_amount")],
+        ]
+    )
