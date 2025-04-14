@@ -35,7 +35,7 @@ class AccessMiddleware(BaseMiddleware):
             now = datetime.now(timezone.utc)
             try:
                 subscription = await Subscription.objects.filter(
-                    telegram_id=telegram_user.id,
+                    user=user,
                     expires_at__gte=now
                 ).afirst()
             except Exception as e:

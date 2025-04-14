@@ -16,7 +16,7 @@ class User(models.Model):
 
 
     def __str__(self):
-        return str(self.telegram_id)
+        return self.name or str(self.telegram_id)
 
     class Meta:
         verbose_name = 'Пользователь telegram'

@@ -1,16 +1,17 @@
 from django.db import models
+from users.models import User  # Импортируй модель User
 
 class Subscription(models.Model):
-    telegram_id = models.BigIntegerField(unique=True)
-    name = models.CharField(max_length=255, blank=True, null=True)
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='subscription', verbose_name='Пользователь')
     expires_at = models.DateTimeField()
 
     def __str__(self):
-        return f"{self.telegram_id} — до {self.expires_at}"
+        return f"{self.user.name or self.user.telegram_id} — до {self.expires_at}"
     
     class Meta:
         verbose_name = 'Подписка'
         verbose_name_plural = 'Подписки'
+
 
 class BotMessageForSubscription(models.Model):
     text = models.TextField()
