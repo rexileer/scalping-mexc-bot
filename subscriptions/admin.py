@@ -12,8 +12,9 @@ class SubscriptionForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Только пользователи без подписки
-        self.fields['user'].queryset = User.objects.filter(subscription__isnull=True)
+        if not self.instance.pk:
+            # Только при создании подписки
+            self.fields['user'].queryset = User.objects.filter(subscription__isnull=True)
 
 @admin.register(Subscription)
 class SubscriptionAdmin(admin.ModelAdmin):
