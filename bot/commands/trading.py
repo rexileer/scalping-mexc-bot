@@ -42,10 +42,6 @@ async def get_user_price(message: Message):
         await message.answer("Произошла ошибка при получении цены.")
 
 
-import locale
-# Устанавливаем русскую локаль для форматирования чисел
-locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')  # может не работать на Windows, тогда использовать кастомную функцию
-
 @router.message(Command("balance"))
 async def balance_handler(message: Message):
     try:
