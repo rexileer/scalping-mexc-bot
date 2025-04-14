@@ -79,8 +79,8 @@ async def balance_handler(message: Message):
         orders_message = (
             f"\n\n📄 <b>Ордера</b>\n"
             f"Количество: {format(total_order_amount, ',.0f').replace(',', ' ')}\n"
-            f"Сумма исполнения: {format(total_order_value, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')} USDT\n"
-            f"Средняя цена исполнения: {format(avg_price, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.')} USDT"
+            f"Сумма исполнения: {format(total_order_value, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')} USDT/USDC\n"
+            f"Средняя цена исполнения: {format(avg_price, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.')} USDT/USDC"
         )
 
         await message.answer(balances_message + orders_message, parse_mode="HTML")
@@ -106,13 +106,14 @@ async def buy_handler(message: Message):
         buy_amount = float(user.buy_amount)
 
         # 1. ПОКУПКА по рынку на сумму
-        buy_order = trade_client.new_order_test(symbol, "BUY", "MARKET", {
+        buy_order = trade_client.new_order(symbol, "BUY", "MARKET", {
             "quoteOrderQty": buy_amount
         })
 
         # 2. Получаем данные из ордера
-        executed_qty = float(buy_order["executedQty"])  # сколько купили
-        avg_price = float(buy_order["fills"][0]["price"])  # по какой цене
+        executed_qty = float(buy_order["executedQty"])
+        avg_price = float(buy_order["fills"][0]["price"])
+
         # executed_qty = 100  # заглушка
         # avg_price = 120  # заглушка
 
@@ -124,7 +125,7 @@ async def buy_handler(message: Message):
         sell_price = round(avg_price * (1 + profit_percent / 100), 6)
 
         # 4. ВЫСТАВЛЯЕМ лимитный SELL ордер
-        sell_order = trade_client.new_order_test(symbol, "SELL", "LIMIT", {
+        sell_order = trade_client.new_order(symbol, "SELL", "LIMIT", {
             "quantity": executed_qty,
             "price": f"{sell_price:.6f}",
             "timeInForce": "GTC"
@@ -148,11 +149,11 @@ async def buy_handler(message: Message):
         # 5. Формируем красивый ответ
         text = (
             f"✅ КУПЛЕНО\n\n"
-            f"{executed_qty:.2f} {symbol[:-4]} по {avg_price:.6f} USDT\n\n"
+            f"{executed_qty:.2f} {symbol[:3]} по {avg_price:.6f} {symbol[3:]}\n\n"
             f"Потрачено\n"
-            f"{spent:.8f} USDT\n\n"
+            f"{spent:.8f} {symbol[3:]}\n\n"
             f"📈 ВЫСТАВЛЕНО\n\n"
-            f"{executed_qty:.2f} {symbol[:-4]} по {sell_price:.6f} USDT"
+            f"{executed_qty:.2f} {symbol[:3]} по {sell_price:.6f} {symbol[3:]}"
         )
         await message.answer(text)
 
@@ -236,9 +237,9 @@ async def status_handler(message: Message):
 
         text = (
             f"🔁 *AutoBuy активен*\n"
-            f"Пара: *{user.pair}*\n\n"
+            f"Пара: *{last_deal.symbol}*\n\n"
             f"{status_text}\n"
-            f"{last_deal.quantity:.4f} {user.pair.split('/')[0]} по {last_deal.sell_price:.4f} USDT\n"
+            f"{last_deal.quantity:.4f} {last_deal.symbol[:3]} по {last_deal.sell_price:.4f} {last_deal.symbol[3:]}\n"
             f"Обновлено: {updated}"
         )
 

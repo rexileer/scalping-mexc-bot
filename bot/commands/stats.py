@@ -59,10 +59,10 @@ async def handle_stats_callback(callback_query: CallbackQuery):
             autobuy = "(AutoBuy)" if deal.is_autobuy else ""
             stats_message += (
                 f"\n🧾 <b>{deal.order_id}</b> {autobuy}\n"
-                f"{amount:.4f} {deal.symbol[:-4]}\n"
-                f"🔹 Куплено по: {buy_price:.5f} ({total_buy:.2f} USDT)\n"
-                f"🔸 Продано по: {sell_price:.5f} ({total_sell:.2f} USDT)\n"
-                f"📊 Прибыль: {profit:.2f} USDT ({profit_percent:.2f}%)\n"
+                f"{amount:.4f} {deal.symbol[:3]}\n"
+                f"🔹 Куплено по: {buy_price:.5f} ({total_buy:.2f} {deal.symbol[3:]})\n"
+                f"🔸 Продано по: {sell_price:.5f} ({total_sell:.2f} {deal.symbol[3:]})\n"
+                f"📊 Прибыль: {profit:.2f} {deal.symbol[3:]} ({profit_percent:.2f}%)\n"
                 f"🕒 {(deal.created_at + UTC_OFFSET).strftime('%d.%m.%Y %H:%M:%S')}\n"
             )
 
@@ -70,7 +70,7 @@ async def handle_stats_callback(callback_query: CallbackQuery):
 
         stats_message += (
             f"\n━━━━━━━━━━━━━━━\n"
-            f"💰 <b>Общая прибыль</b>: {profit_total:.2f} USDT\n"
+            f"💰 <b>Общая прибыль</b>: {profit_total:.2f} USDT/USDC\n"
             f"📈 <b>Средний % профита</b>: {avg_profit_percent:.2f}%"
         )
 
