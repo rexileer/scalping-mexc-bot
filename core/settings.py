@@ -10,8 +10,9 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 
 DEBUG = os.getenv('DEBUG', False)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '*']
 
+CSRF_TRUSTED_ORIGINS = ['https://00e4-195-58-39-243.ngrok-free.app']
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -61,7 +62,7 @@ DATABASES = {
         'NAME': os.getenv('POSTGRES_DB', 'default_db_name'),
         'USER': os.getenv('POSTGRES_USER', 'default_user'),
         'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'default_password'),
-        'HOST': os.getenv('POSTGRES_HOST', 'db'),
+        'HOST': os.getenv('POSTGRES_HOST', 'scalpingdb'),
         'PORT': os.getenv('POSTGRES_PORT', '5432'),
     }
 }
