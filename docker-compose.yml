@@ -1,0 +1,51 @@
+services:
+  scalpingdb:
+    image: postgres:latest
+    container_name: scalpingdb
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - scalping_network
+    restart: unless-stopped
+
+  scalpingweb:
+    build: .
+    container_name: scalpingweb
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - scalpingdb
+    networks:
+      - scalping_network
+    restart: unless-stopped
+
+  scalpingbot:
+    build: .
+    container_name: scalpingbot
+    command: ["python", "bot/tg_bot.py"]
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - scalpingdb
+    networks:
+      - scalping_network
+    restart: unless-stopped
+
+
+networks:
+  scalping_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
