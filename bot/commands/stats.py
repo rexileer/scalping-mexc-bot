@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from asgiref.sync import sync_to_async
-
+from bot.keyboards.inline import get_period_keyboard
 from users.models import User
 from bot.logger import logger
 
@@ -15,7 +15,7 @@ UTC_OFFSET = timedelta(hours=3)  # UTC+3
 @router.callback_query(F.data.startswith("stats:"))
 async def handle_stats_callback(callback_query: CallbackQuery):
     data = callback_query.data.split(":")[1]
-    now = datetime.utcnow() + UTC_OFFSET  # используем UTC + 3
+    now = datetime.utcnow() + UTC_OFFSET  # UTC + 3
 
     if data == "today":
         start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -27,7 +27,6 @@ async def handle_stats_callback(callback_query: CallbackQuery):
         start_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
     end_date = now
-    await callback_query.message.answer("Формирую статистику...")
 
     try:
         user_id = callback_query.from_user.id
@@ -37,7 +36,10 @@ async def handle_stats_callback(callback_query: CallbackQuery):
 
         if not deals:
             stats_message += "\nНет завершённых продаж за указанный период."
-            await callback_query.message.answer(stats_message)
+            await callback_query.message.edit_text(
+                stats_message,
+                reply_markup=get_period_keyboard()
+            )
             return
 
         profit_total = 0
@@ -74,12 +76,19 @@ async def handle_stats_callback(callback_query: CallbackQuery):
             f"📈 <b>Средний % профита</b>: {avg_profit_percent:.2f}%"
         )
 
-        await callback_query.message.answer(stats_message)
+        await callback_query.message.edit_text(
+            stats_message,
+            reply_markup=get_period_keyboard(),
+            parse_mode="HTML"
+        )
         logger.info(f"Stats sent to user {user.telegram_id}")
 
     except Exception as e:
         logger.error(f"Ошибка в send_stats для {user_id}: {e}")
-        await callback_query.message.answer("Произошла ошибка при получении статистики.")
+        await callback_query.message.edit_text(
+            "Произошла ошибка при получении статистики.",
+            reply_markup=get_period_keyboard()
+        )
 
 
 @sync_to_async
