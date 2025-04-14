@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from asgiref.sync import sync_to_async
 from .states import ParameterChange
@@ -8,6 +8,7 @@ from bot.logger import logger
 from bot.keyboards.inline import build_parameters_keyboard
 
 router = Router()
+
 
 # Команда для отображения параметров
 @router.message(F.text == "/parameters")
@@ -19,13 +20,14 @@ async def show_parameters(message: Message, state: FSMContext):
         return
 
     keyboard = build_parameters_keyboard(user_params)
-    await message.answer("Выберите параметр для изменения:", reply_markup=keyboard)
-
+    sent = await message.answer("Выберите параметр для изменения:", reply_markup=keyboard)
+    await state.update_data(menu_message_id=sent.message_id)
 
 
 async def handle_param_change(callback_query: CallbackQuery, state: FSMContext, text: str, state_to_set):
     await callback_query.message.edit_text(text)
     await state.set_state(state_to_set)
+    await state.update_data(menu_message_id=callback_query.message.message_id)
     await callback_query.answer()
 
 
@@ -55,10 +57,21 @@ async def finalize_parameter_change(message: Message, state: FSMContext, field: 
         await save_user_parameter(message.from_user.id, field, value)
         user_params = await get_user_parameters(message.from_user.id)
         keyboard = build_parameters_keyboard(user_params)
-        await message.answer(f"[OK] {field} обновлён: {value}", reply_markup=keyboard)
+        data = await state.get_data()
+        menu_message_id = data.get("menu_message_id")
+
+        # Редактируем старое сообщение бота с новой клавиатурой
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=menu_message_id,
+            text=f"✅ Параметр `{field}` обновлён: `{value}`\n\nВыберите следующий параметр:",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
     except ValueError:
         await message.answer("❌ Некорректное значение. Попробуйте снова.")
     finally:
+        await message.delete()  # Удаляем сообщение пользователя
         await state.clear()
 
 
