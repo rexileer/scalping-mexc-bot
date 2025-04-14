@@ -11,8 +11,8 @@ class User(models.Model):
     profit = models.FloatField(null=True, blank=True)
     pause = models.IntegerField(null=True, blank=True)
     loss = models.FloatField(null=True, blank=True)
-    is_active = models.BooleanField(default=False) 
     buy_amount = models.DecimalField(max_digits=10, decimal_places=2, default=10.00)
+    autobuy = models.BooleanField(default=False)
 
 
     def __str__(self):
@@ -45,6 +45,7 @@ class Deal(models.Model):
     status = models.CharField(max_length=20, default="NEW")  # NEW, FILLED, PARTIALLY_FILLED, etc.
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    is_autobuy = models.BooleanField(default=False)
 
     def __str__(self):
         return f"Order ID: {self.order_id}, Symbol: {self.symbol}, Buy Price: {self.buy_price}, Sell Price: {self.sell_price}, Quantity: {self.quantity}, Status: {self.status}"

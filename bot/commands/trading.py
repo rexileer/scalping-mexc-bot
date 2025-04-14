@@ -3,6 +3,7 @@ from aiogram.types import Message
 from aiogram.filters import Command
 import asyncio
 from bot.commands.buy import monitor_order
+from bot.commands.autobuy import autobuy_loop
 from bot.middlewares.require_pair_middleware import RequirePairMiddleware
 from bot.utils.mexc import get_user_client
 from users.models import User, Deal
@@ -166,16 +167,45 @@ async def buy_handler(message: Message):
 
 
 # /auto_buy
+user_autobuy_tasks = {}
+
 @router.message(Command("autobuy"))
-async def auto_buy_handler(message: Message):
-    try:
-        user = User.objects.get(telegram_id=message.from_user.id)
-        # Активируем автопокупку
-        await message.answer(f"🤖 Автопокупка по паре {user.pair} активирована (заглушка)")
-        logger.info(f"User {user.telegram_id} activated auto-buy for {user.pair}.")
-    except Exception as e:
-        logger.error(f"Ошибка при активации автопокупки для пользователя {message.from_user.id}: {e}")
-        await message.answer("Произошла ошибка при активации автопокупки.")
+async def autobuy_handler(message: Message):
+    telegram_id = message.from_user.id
+    user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
+
+    if user.autobuy:
+        await message.answer("⚠️ Автобай уже запущен. Остановить: /stop")
+        return
+
+    user.autobuy = True
+    await sync_to_async(user.save)()
+
+    task = asyncio.create_task(autobuy_loop(message, telegram_id))
+    user_autobuy_tasks[telegram_id] = task
+
+    await message.answer("🔁 Автобай запущен. Остановить: /stop")
+
+
+@router.message(Command("stop"))
+async def stop_autobuy(message: Message):
+    telegram_id = message.from_user.id
+    user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
+
+    task = user_autobuy_tasks.get(telegram_id)
+
+    if user.autobuy:
+        user.autobuy = False
+        await sync_to_async(user.save)()
+
+        if task:
+            task.cancel()
+            del user_autobuy_tasks[telegram_id]
+
+        await message.answer("⛔ Автобай остановлен.")
+    else:
+        await message.answer("⚠️ Автобай не был запущен.")
+
 
 # /status
 @router.message(Command("status"))
