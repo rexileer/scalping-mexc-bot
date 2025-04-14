@@ -11,7 +11,7 @@ from logger import logger
 from bot.keyboards.inline import get_period_keyboard
 from asgiref.sync import sync_to_async
 from mexc_sdk import Trade  # Предполагаем, что именно этот класс отвечает за торговые операции
-
+from django.utils.timezone import localtime
 
 router = Router()
 router.message.middleware(RequirePairMiddleware())
@@ -210,14 +210,44 @@ async def stop_autobuy(message: Message):
 # /status
 @router.message(Command("status"))
 async def status_handler(message: Message):
+    telegram_id = message.from_user.id
     try:
-        user = User.objects.get(telegram_id=message.from_user.id)
-        # Отправляем статус отслеживания
-        await message.answer(f"📊 Статус отслеживания по {user.pair}: активен (заглушка)")
-        logger.info(f"User {user.telegram_id} requested status for {user.pair}.")
+        user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
+
+        if not user.autobuy:
+            await message.answer("⏸ AutoBuy не запущен.")
+            return
+
+        last_deal = await sync_to_async(
+            lambda: Deal.objects.filter(user=user, is_autobuy=True).order_by("-created_at").first()
+        )()
+
+        if not last_deal:
+            await message.answer("🔁 AutoBuy запущен.\nОжидается первая сделка...")
+            return
+
+        updated = localtime(last_deal.updated_at).strftime('%d.%m %H:%M')
+
+        status_text = {
+            "SELL_ORDER_PLACED": "⏳ Ожидает продажи",
+            "FILLED": "✅ Сделка исполнена",
+            "CANCELLED": "❌ Отменена",
+        }.get(last_deal.status, f"📌 Статус: {last_deal.status}")
+
+        text = (
+            f"🔁 *AutoBuy активен*\n"
+            f"Пара: *{user.pair}*\n\n"
+            f"{status_text}\n"
+            f"{last_deal.quantity:.4f} {user.pair.split('/')[0]} по {last_deal.sell_price:.4f} USDT\n"
+            f"Обновлено: {updated}"
+        )
+
+        await message.answer(text, parse_mode="Markdown")
+        logger.info(f"User {telegram_id} requested autobuy status.")
+        
     except Exception as e:
-        logger.error(f"Ошибка при получении статуса для пользователя {message.from_user.id}: {e}")
-        await message.answer("Произошла ошибка при получении статуса.")
+        logger.error(f"Ошибка при получении статуса для пользователя {telegram_id}: {e}")
+        await message.answer("❌ Ошибка при получении статуса.")
 
 
 # /stats
