@@ -1,7 +1,8 @@
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.filters import Command
-from subscriptions.models import Subscription, BotMessageForSubscription
+from subscriptions.models import Subscription
+from editing.models import BotMessageForSubscription
 from django.utils.timezone import now
 from bot.constants import DEFAULT_PAYMENT_MESSAGE
 

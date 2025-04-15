@@ -5,20 +5,37 @@ from asgiref.sync import sync_to_async
 from .states import APIAuth
 from users.models import User
 from utils.mexc import check_mexc_keys
+from editing.models import BotMessagesForKeys
 import asyncio
 
 router = Router()
 
 @router.message(F.text == "/set_keys")
 async def start_setting_keys(message: Message, state: FSMContext):
-    await message.answer("Введите ваш API Key:")
-    await state.set_state(APIAuth.waiting_for_api_key)
+    try:
+        bot_message = await BotMessagesForKeys.objects.afirst()
+        if bot_message:
+            await message.answer(bot_message.access_key)
+        else:
+            await message.answer("Введите ваш API Key:")
+    except Exception as e:
+        await message.answer("Введите ваш API Key:")
+    finally:
+        await state.set_state(APIAuth.waiting_for_api_key)
 
 @router.message(APIAuth.waiting_for_api_key)
 async def get_api_key(message: Message, state: FSMContext):
     await state.update_data(api_key=message.text)
-    await message.answer("Теперь введите ваш API Secret:")
-    await state.set_state(APIAuth.waiting_for_api_secret)
+    try:
+        bot_message = await BotMessagesForKeys.objects.afirst()
+        if bot_message:
+            await message.answer(bot_message.secret_key)
+        else:
+            await message.answer("Теперь введите ваш API Secret:")
+    except Exception as e:
+        await message.answer("Теперь введите ваш API Secret:")
+    finally:
+        await state.set_state(APIAuth.waiting_for_api_secret)
 
 @router.message(APIAuth.waiting_for_api_secret)
 async def get_api_secret(message: Message, state: FSMContext):

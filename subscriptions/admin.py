@@ -1,8 +1,6 @@
 from django.contrib import admin
-from .models import Subscription, BotMessageForSubscription
-
-from django import forms
 from .models import Subscription
+from django import forms
 from users.models import User
 
 class SubscriptionForm(forms.ModelForm):
@@ -26,7 +24,3 @@ class SubscriptionAdmin(admin.ModelAdmin):
         return obj.user.telegram_id
     get_telegram_id.short_description = 'Telegram ID'
 
-@admin.register(BotMessageForSubscription)
-class BotMessageForSubscriptionAdmin(admin.ModelAdmin):
-    def has_add_permission(self, request):
-        return not BotMessageForSubscription.objects.exists()  # Разрешаем добавлять, только если нет записей

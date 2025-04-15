@@ -3,7 +3,8 @@ from aiogram import BaseMiddleware
 from typing import Callable, Dict, Any, Awaitable
 from bot.logger import logger
 from users.models import User 
-from subscriptions.models import Subscription, BotMessageForSubscription
+from subscriptions.models import Subscription
+from editing.models import BotMessageForSubscription
 from datetime import datetime, timezone
 from django.db.utils import OperationalError
 from bot.constants import DEFAULT_PAYMENT_MESSAGE
