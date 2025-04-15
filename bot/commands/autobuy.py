@@ -4,6 +4,8 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 from users.models import Deal, User
 from logger import logger
+from subscriptions.models import Subscription
+from bot.utils.user_autobuy_tasks import user_autobuy_tasks
 
 from mexc_sdk import Trade
 
@@ -22,6 +24,22 @@ async def autobuy_loop(message: Message, telegram_id: int):
 
         while True:
             user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
+            subscription = await sync_to_async(Subscription.objects.filter(user=user).order_by('-end_date').first)()
+
+            if not subscription or subscription.expires_at < timezone.now():
+                user.autobuy = False
+                await sync_to_async(user.save)()
+
+                # Удалим задачу из глобального хранилища
+                task = user_autobuy_tasks.get(telegram_id)
+                if task:
+                    task.cancel()
+                    del user_autobuy_tasks[telegram_id]
+
+                await message.answer("⛔ Ваша подписка закончилась. Автобай остановлен.")
+                logger.info(f"Autobuy stopped for {telegram_id} due to expired subscription")
+                break  # Выходим из цикла
+            
             current_price = float(trade_client.ticker_price(symbol)['price'])
 
             # Если это первая покупка или цена упала на заданный процент от последней покупки
@@ -87,7 +105,6 @@ async def autobuy_loop(message: Message, telegram_id: int):
 
     except asyncio.CancelledError:
         logger.info(f"Autobuy cancelled for {telegram_id}")
-        await message.answer("⛔ Автобай был остановлен.")
         raise
     except Exception as e:
         logger.error(f"Ошибка в autobuy_loop для {telegram_id}: {e}")
