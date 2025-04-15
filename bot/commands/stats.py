@@ -1,5 +1,8 @@
+import datetime
+import pytz
+from django.utils import timezone
 from users.models import Deal
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from asgiref.sync import sync_to_async
@@ -9,13 +12,13 @@ from bot.logger import logger
 
 router = Router()
 
-UTC_OFFSET = timedelta(hours=3)  # UTC+3
+MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 
 
 @router.callback_query(F.data.startswith("stats:"))
 async def handle_stats_callback(callback_query: CallbackQuery):
     data = callback_query.data.split(":")[1]
-    now = datetime.utcnow() + UTC_OFFSET  # UTC + 3
+    now = timezone.now().astimezone(MOSCOW_TZ)
 
     if data == "today":
         start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -24,7 +27,7 @@ async def handle_stats_callback(callback_query: CallbackQuery):
     elif data == "month":
         start_date = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     elif data == "all":
-        start_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        start_date = timezone.datetime(2020, 1, 1, tzinfo=MOSCOW_TZ)
 
     end_date = now
 
@@ -59,13 +62,15 @@ async def handle_stats_callback(callback_query: CallbackQuery):
             percent_total += profit_percent
 
             autobuy = "(AutoBuy)" if deal.is_autobuy else ""
+            deal_time = deal.created_at.astimezone(MOSCOW_TZ)
+
             stats_message += (
                 f"\n🧾 <b>{deal.order_id}</b> {autobuy}\n"
                 f"{amount:.4f} {deal.symbol[:3]}\n"
                 f"🔹 Куплено по: {buy_price:.5f} ({total_buy:.2f} {deal.symbol[3:]})\n"
                 f"🔸 Продано по: {sell_price:.5f} ({total_sell:.2f} {deal.symbol[3:]})\n"
                 f"📊 Прибыль: {profit:.2f} {deal.symbol[3:]} ({profit_percent:.2f}%)\n"
-                f"🕒 {(deal.created_at + UTC_OFFSET).strftime('%d.%m.%Y %H:%M:%S')}\n"
+                f"🕒 {deal_time.strftime('%d.%m.%Y %H:%M:%S')}\n"
             )
 
         avg_profit_percent = percent_total / len(deals)
