@@ -1,3 +1,6 @@
+from django.conf import settings
+
+
 PAYMENT_TIME = 30
 PAYMENT_AMOUNT = 100
 PAYMENT_WALLET = "TY43ubA82J5mrViFwAsNpNLkNLaj2rvx1Z"
@@ -10,4 +13,4 @@ DEFAULT_PAYMENT_MESSAGE = (
     f"2️⃣ После оплаты отправьте скриншот и TXID в ЛС 👉 @TestScalpingBotSupport\n\n"
     f"Перед оплатой рекомендуем нажать /start для актуализации информации."
 )
-PAIR = "KASUSDT"
+PAIR = settings.PAIR

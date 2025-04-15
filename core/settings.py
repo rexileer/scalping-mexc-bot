@@ -95,3 +95,4 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_TOKEN')
+PAIR = os.getenv('PAIR')
