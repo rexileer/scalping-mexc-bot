@@ -11,7 +11,6 @@ async def set_default_commands(bot: Bot):
         BotCommand(command="/status", description="Статус"),
         BotCommand(command="/parameters", description="Параметры"),
         BotCommand(command="/faq", description="FAQ"),
-        BotCommand(command="/pair", description="Торговая пара"),
         BotCommand(command="/subscription", description="Подписка"),
         BotCommand(command="/stats", description="Статистика"),
         BotCommand(command="/set_keys", description="Авторизация MEXC/Установка ключей"),

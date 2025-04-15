@@ -7,7 +7,7 @@ from subscriptions.models import Subscription
 from editing.models import BotMessageForSubscription
 from datetime import datetime, timezone
 from django.db.utils import OperationalError
-from bot.constants import DEFAULT_PAYMENT_MESSAGE
+from bot.constants import DEFAULT_PAYMENT_MESSAGE, PAIR
 
 
 class AccessMiddleware(BaseMiddleware):
@@ -26,7 +26,8 @@ class AccessMiddleware(BaseMiddleware):
                 # Добавление юзера, если нет
                 user, _ = await User.objects.aget_or_create(
                     telegram_id=telegram_user.id,
-                    defaults={"name": telegram_user.username or ""}
+                    defaults={"name": telegram_user.username or ""},
+                    pair=PAIR,
                 )
             except Exception as e:
                 logger.error(f"DB error while checking/creating user: {e}")

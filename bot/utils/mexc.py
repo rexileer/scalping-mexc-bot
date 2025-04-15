@@ -18,6 +18,9 @@ def check_mexc_keys(api_key: str, api_secret: str) -> bool:
     }
 
     response = requests.get(f"{url}?{query_string}&signature={signature}", headers=headers)
+    
+    logger.info(f"Response status code: {response.status_code}, response text: {response.text}")
+    # Проверяем, что статус код 200 (успех)
 
     return response.status_code == 200
 

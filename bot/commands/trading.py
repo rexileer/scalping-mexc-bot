@@ -4,8 +4,8 @@ from aiogram.filters import Command
 import asyncio
 from bot.commands.buy import monitor_order
 from bot.commands.autobuy import autobuy_loop
-from bot.middlewares.require_pair_middleware import RequirePairMiddleware
 from bot.utils.mexc import get_user_client
+from bot.utils.user_autobuy_tasks import user_autobuy_tasks
 from users.models import User, Deal
 from logger import logger
 from bot.keyboards.inline import get_period_keyboard
@@ -14,7 +14,6 @@ from mexc_sdk import Trade  # Предполагаем, что именно эт
 from django.utils.timezone import localtime
 
 router = Router()
-router.message.middleware(RequirePairMiddleware())
 
 # /price
 @router.message(Command("price"))
@@ -164,8 +163,6 @@ async def buy_handler(message: Message):
 
 
 # /auto_buy
-user_autobuy_tasks = {}
-
 @router.message(Command("autobuy"))
 async def autobuy_handler(message: Message):
     telegram_id = message.from_user.id

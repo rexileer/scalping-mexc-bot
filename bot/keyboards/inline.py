@@ -8,12 +8,6 @@ def get_period_keyboard():
         [InlineKeyboardButton(text="📊 Этот месяц", callback_data="stats:month")],
         [InlineKeyboardButton(text="🕰 Всё время", callback_data="stats:all")],
     ])
-
-def get_pair_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="KAS/USDT", callback_data="pair_KASUSDT")],
-        [InlineKeyboardButton(text="BTC/USDC", callback_data="pair_BTCUSDC")],
-    ])
     
 def get_faq_keyboard():
     faqs = FAQ.objects.all()
