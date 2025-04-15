@@ -94,4 +94,5 @@ MEDIA_URL = '/media/'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_BOT_TOKEN_KAS = os.getenv('TELEGRAM_TOKEN_KAS')
+TELEGRAM_BOT_TOKEN_BTC = os.getenv('TELEGRAM_TOKEN_BTC')
