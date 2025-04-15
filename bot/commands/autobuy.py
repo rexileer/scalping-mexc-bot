@@ -24,7 +24,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
 
         while True:
             user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
-            subscription = await sync_to_async(Subscription.objects.filter(user=user).order_by('-end_date').first)()
+            subscription = await sync_to_async(Subscription.objects.filter(user=user).order_by('-expires_at').first)()
 
             if not subscription or subscription.expires_at < timezone.now():
                 user.autobuy = False
