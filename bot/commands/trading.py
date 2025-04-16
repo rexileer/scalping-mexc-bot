@@ -12,6 +12,7 @@ from bot.keyboards.inline import get_period_keyboard
 from asgiref.sync import sync_to_async
 from mexc_sdk import Trade  # Предполагаем, что именно этот класс отвечает за торговые операции
 from django.utils.timezone import localtime
+from bot.utils.mexc import handle_mexc_response
 
 router = Router()
 
@@ -104,6 +105,7 @@ async def buy_handler(message: Message):
         buy_order = trade_client.new_order(symbol, "BUY", "MARKET", {
             "quoteOrderQty": buy_amount
         })
+        handle_mexc_response(buy_order, "Покупка через /buy")
 
         # 2. Получаем данные из ордера
         executed_qty = float(buy_order["executedQty"])
@@ -125,6 +127,7 @@ async def buy_handler(message: Message):
             "price": f"{sell_price:.6f}",
             "timeInForce": "GTC"
         })
+        handle_mexc_response(sell_order, "Продажа")
         # Сохраняем ордер в базе данных как покупку
         order_id = sell_order['orderId']
         deal = await sync_to_async(Deal.objects.create)(
@@ -158,8 +161,8 @@ async def buy_handler(message: Message):
         logger.info(f"Monitoring order {buy_order['orderId']} for user {user.telegram_id}.")
     except Exception as e:
         logger.error(f"Ошибка при /buy для {message.from_user.id}: {e}")
-        await message.answer("❌ Ошибка при выполнении сделки.")
-
+        error_text = f"❌ Ошибка при выполнении сделки:\n\n{str(e)}"
+        await message.answer(error_text)
 
 
 # /auto_buy

@@ -44,3 +44,11 @@ def get_user_client(telegram_id: int):
     except Exception as e:
         logger.error(f"Ошибка при получении клиента для пользователя {telegram_id}: {e}")
         raise ValueError(f"Ошибка: {e}")
+    
+    
+def handle_mexc_response(response: dict, context: str = ""):
+    if isinstance(response, dict) and response.get("code") and response.get("code") != 200:
+        code = response.get("code")
+        msg = response.get("msg", "No message")
+        raise Exception(f"[MEXC ERROR] {context}: Code {code}, Message: {msg}")
+    return response

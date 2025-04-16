@@ -4,7 +4,7 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 from users.models import Deal
 from logger import logger
-
+from bot.utils.mexc import handle_mexc_response
 from mexc_sdk import Trade
 
 
@@ -22,14 +22,31 @@ async def monitor_order(message: Message, order_id: str):
     while True:
         try:
             order_status = trade_client.query_order(symbol, options={"orderId": order_id})
+            handle_mexc_response(order_status, "Проверка ордера")
             status = order_status.get("status")
 
             if status == "FILLED":
                 deal.status = "FILLED"
                 deal.updated_at = timezone.now()
                 await sync_to_async(deal.save)()
-                await message.answer(f"✅ Сделка {deal.side} исполнена!")
+
+                buy_total = deal.quantity * deal.buy_price
+                sell_total = deal.quantity * deal.sell_price
+                profit = sell_total - buy_total
+                symbol = deal.symbol
+                base = symbol[:3]
+                quote = symbol[3:]
+
+                text = (
+                    f"✅ СДЕЛКА ИСПОЛНЕНА\n\n"
+                    f"🔁 Покупка: {deal.quantity:.2f} {base} по {deal.buy_price:.6f} {quote}\n"
+                    f"📈 Продажа: {deal.quantity:.2f} {base} по {deal.sell_price:.6f} {quote}\n\n"
+                    f"💰 Прибыль: {profit:+.6f} {quote}"
+                )
+
+                await message.answer(text)
                 return
+
 
             await asyncio.sleep(60)
         except Exception as e:
