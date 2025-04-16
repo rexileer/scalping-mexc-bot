@@ -3,6 +3,7 @@ from aiogram.types import Message
 from aiogram.filters import CommandStart
 from bot.logger import logger
 from editing.models import BotMessageForStart
+from aiogram.types import FSInputFile
 
 router = Router()
 
@@ -13,7 +14,11 @@ async def bot_start(message: Message):
         # Получаем кастомное сообщение из базы
         custom_message = await BotMessageForStart.objects.afirst()
         if custom_message:
-            await message.answer(custom_message.text)
+            if custom_message.image:
+                file = FSInputFile(custom_message.image.path)
+                await message.answer_photo(file, custom_message.text, parse_mode="HTML")
+            else:
+                await message.answer(custom_message.text)
         else:
             await message.answer("Добро пожаловать в MexcBot!")
     except Exception as e:

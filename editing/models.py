@@ -3,6 +3,7 @@ from django.db import models
 
 class BotMessageForStart(models.Model):
     text = models.TextField()
+    image = models.FileField(upload_to='media/', blank=True, null=True)
     
     def save(self, *args, **kwargs):
         if BotMessageForStart.objects.exists():
@@ -20,6 +21,8 @@ class BotMessageForStart(models.Model):
 class BotMessagesForKeys(models.Model):
     access_key = models.TextField()
     secret_key = models.TextField()
+    access_image = models.FileField(upload_to='media/', blank=True, null=True)
+    secret_image = models.FileField(upload_to='media/', blank=True, null=True)
     
     def save(self, *args, **kwargs):
         if BotMessageForStart.objects.exists():
@@ -36,6 +39,7 @@ class BotMessagesForKeys(models.Model):
     
 class BotMessageForSubscription(models.Model):
     text = models.TextField()
+    image = models.FileField(upload_to='media/', blank=True, null=True)
     
     def save(self, *args, **kwargs):
         if BotMessageForSubscription.objects.exists():

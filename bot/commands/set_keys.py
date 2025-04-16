@@ -7,6 +7,7 @@ from users.models import User
 from utils.mexc import check_mexc_keys
 from editing.models import BotMessagesForKeys
 import asyncio
+from aiogram.types import FSInputFile
 
 router = Router()
 
@@ -15,7 +16,11 @@ async def start_setting_keys(message: Message, state: FSMContext):
     try:
         bot_message = await BotMessagesForKeys.objects.afirst()
         if bot_message:
-            await message.answer(bot_message.access_key)
+            if bot_message.access_image:
+                file = FSInputFile(bot_message.access_image.path)
+                await message.answer_photo(file, bot_message.access_key, parse_mode="HTML")
+            else:
+                await message.answer(bot_message.access_key)
         else:
             await message.answer("Введите ваш API Key:")
     except Exception as e:
@@ -29,7 +34,11 @@ async def get_api_key(message: Message, state: FSMContext):
     try:
         bot_message = await BotMessagesForKeys.objects.afirst()
         if bot_message:
-            await message.answer(bot_message.secret_key)
+            if bot_message.secret_image:
+                file = FSInputFile(bot_message.secret_image.path)
+                await message.answer_photo(file, bot_message.secret_key, parse_mode="HTML")
+            else:
+                await message.answer(bot_message.secret_key)
         else:
             await message.answer("Теперь введите ваш API Secret:")
     except Exception as e:

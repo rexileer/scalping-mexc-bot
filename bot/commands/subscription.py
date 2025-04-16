@@ -5,7 +5,7 @@ from subscriptions.models import Subscription
 from editing.models import BotMessageForSubscription
 from django.utils.timezone import now
 from bot.constants import DEFAULT_PAYMENT_MESSAGE
-
+from aiogram.types import FSInputFile
 router = Router()
 
 @router.message(Command("subscription"))
@@ -50,11 +50,17 @@ async def handle_payment_button(callback_query: CallbackQuery):
     try:
         bot_message = BotMessageForSubscription.objects.first()  # Сохраняем только первую запись
     except:
-        await callback_query.edit_text(DEFAULT_PAYMENT_MESSAGE, parse_mode="HTML")
+        await callback_query.message.edit_text(DEFAULT_PAYMENT_MESSAGE, parse_mode="HTML")
         return
 
     # Отправляем платежное сообщение
-    await callback_query.message.edit_text(bot_message.text, parse_mode="HTML")
+    if bot_message.image:
+        # Если есть изображение, отправляем его
+        await callback_query.message.delete()
+        file = FSInputFile(bot_message.image.path)
+        await callback_query.message.answer_photo(file, bot_message.text, parse_mode="HTML")
+    else:
+        await callback_query.message.edit_text(bot_message.text, parse_mode="HTML")
 
     # Подтверждаем обработку callback'а
     await callback_query.answer()

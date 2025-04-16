@@ -8,6 +8,7 @@ from editing.models import BotMessageForSubscription
 from datetime import datetime, timezone
 from django.db.utils import OperationalError
 from bot.constants import DEFAULT_PAYMENT_MESSAGE, PAIR
+from aiogram.types import FSInputFile
 
 
 class AccessMiddleware(BaseMiddleware):
@@ -56,7 +57,10 @@ class AccessMiddleware(BaseMiddleware):
                 except Exception as e:
                     logger.error(f"Error while fetching subscription message: {e}")
                     text_to_send = DEFAULT_PAYMENT_MESSAGE
-
+                if custom_message and custom_message.image:
+                    file = FSInputFile(custom_message.image.path)
+                    await message.answer_photo(file, text_to_send, parse_mode="HTML")
+                    return
                 await message.answer(text_to_send, parse_mode="HTML")
                 return
 
