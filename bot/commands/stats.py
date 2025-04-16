@@ -5,7 +5,7 @@ from datetime import timedelta
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from asgiref.sync import sync_to_async
-from bot.keyboards.inline import get_period_keyboard, get_month_keyboard, get_year_keyboard
+from bot.keyboards.inline import get_period_keyboard, get_month_keyboard, get_year_for_month_keyboard, get_year_keyboard
 from users.models import User
 from bot.logger import logger
 
@@ -20,11 +20,18 @@ async def select_year(callback_query: CallbackQuery):
     keyboard = get_year_keyboard(current_year)
     await callback_query.message.edit_text("Выберите год:", reply_markup=keyboard)
 
+@router.callback_query(F.data == "stats:select_month")
+async def select_month(callback_query: CallbackQuery):
+    now = timezone.now().astimezone(MOSCOW_TZ)
+    current_year = now.year
+    keyboard = get_year_for_month_keyboard(current_year)
+    await callback_query.message.edit_text("Выберите год:", reply_markup=keyboard)
+
 @router.callback_query(F.data == ("stats:back"))
 async def select_month(callback_query: CallbackQuery):
     await callback_query.message.edit_text("Выберите период для статистики:", reply_markup=get_period_keyboard())
 
-@router.callback_query(F.data.startswith("stats:year:"))
+@router.callback_query(F.data.startswith("stats:yeartomonth:"))
 async def select_month(callback_query: CallbackQuery):
     year = int(callback_query.data.split(":")[2])
     keyboard = get_month_keyboard(year)
@@ -44,9 +51,10 @@ async def handle_stats_callback(callback_query: CallbackQuery):
     elif parts[1] == "7d":
         start_date = now - timedelta(days=7)
         end_date = now
-    elif parts[1] == "12months":
-        start_date = now - timedelta(days=365)
-        end_date = now
+    elif parts[1] == "year":
+        year = int(parts[2])
+        start_date = timezone.datetime(year, 1, 1, tzinfo=MOSCOW_TZ)
+        end_date = start_date + timedelta(days=365)
     elif parts[1] == "all":
         start_date = timezone.datetime(2020, 1, 1, tzinfo=MOSCOW_TZ)
         end_date = now

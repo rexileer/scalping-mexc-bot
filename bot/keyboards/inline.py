@@ -1,16 +1,17 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from faq.models import FAQ
-from django.utils import timezone
+from bot.constants import MONTHS_RU
 
 def get_period_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Сегодня", callback_data="stats:today")],
         [InlineKeyboardButton(text="📅 Последние 7 дней", callback_data="stats:7d")],
-        [InlineKeyboardButton(text="📆 Выбрать месяц", callback_data="stats:select_year")],
-        [InlineKeyboardButton(text="📆 За последние 12 месяцев", callback_data="stats:12months")],
+        [InlineKeyboardButton(text="📆 Выбрать месяц", callback_data="stats:select_month")],
+        [InlineKeyboardButton(text="📆 Выбрать год", callback_data="stats:select_year")],
         [InlineKeyboardButton(text="🕰 Всё время", callback_data="stats:all")],
     ])
-    
+
+
 def get_year_keyboard(current_year):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=str(current_year), callback_data=f"stats:year:{current_year}")],
@@ -18,14 +19,28 @@ def get_year_keyboard(current_year):
         [InlineKeyboardButton(text="↩ Назад", callback_data="stats:back")],
     ])
     
+def get_year_for_month_keyboard(current_year):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=str(current_year), callback_data=f"stats:yeartomonth:{current_year}")],
+        [InlineKeyboardButton(text=str(current_year - 1), callback_data=f"stats:yeartomonth:{current_year - 1}")],
+        [InlineKeyboardButton(text="↩ Назад", callback_data="stats:back")],
+    ])
+
 def get_month_keyboard(year):
-    buttons = [
-        [InlineKeyboardButton(text=timezone.datetime(1900, month, 1).strftime("%B"),
-                              callback_data=f"stats:month:{year}:{month}")]
-        for month in range(1, 13)
-    ]
-    buttons.append([InlineKeyboardButton(text="↩ Назад", callback_data="stats:select_year")])
+    buttons = []
+    for i in range(1, 13, 2):
+        row = [
+            InlineKeyboardButton(text=MONTHS_RU[i], callback_data=f"stats:month:{year}:{i}"),
+            InlineKeyboardButton(text=MONTHS_RU[i+1], callback_data=f"stats:month:{year}:{i+1}")
+        ]
+        buttons.append(row)
+
+    buttons.append([
+        InlineKeyboardButton(text="↩ Назад", callback_data="stats:select_year")
+    ])
+
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
     
 def get_faq_keyboard():
     faqs = FAQ.objects.all()
