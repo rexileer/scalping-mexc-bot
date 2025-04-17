@@ -227,7 +227,7 @@ async def monitor_order_autobuy(
         handle_mexc_response(price_data, "Проверка цены")
         current_price = float(price_data["price"])
         drop_percent = ((buy_price - current_price) / buy_price) * 100
-        logger.info(f"Падение цены для ордера {order_id}: {drop_percent:.2f}%")
+        # logger.info(f"Падение цены для ордера {order_id}: {drop_percent:.2f}%")
 
         if drop_percent >= loss_threshold and not order_info["notified"]:
             await message.answer(
