@@ -9,8 +9,7 @@ from bot.utils.mexc import handle_mexc_response
 from mexc_sdk import Trade
 from logger import logger
 from decimal import Decimal
-
-MAX_FAILS = 5 # Максимальное количество неудачных попыток до остановки автобая
+from bot.constants import MAX_FAILS
 
 async def autobuy_loop(message: Message, telegram_id: int):
     try:

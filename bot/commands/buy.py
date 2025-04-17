@@ -6,6 +6,7 @@ from users.models import Deal
 from logger import logger
 from bot.utils.mexc import handle_mexc_response
 from mexc_sdk import Trade
+from bot.constants import MAX_FAILS
 
 
 async def monitor_order(message: Message, order_id: str, user_order_number: int):
@@ -16,6 +17,7 @@ async def monitor_order(message: Message, order_id: str, user_order_number: int)
         user = deal.user
         trade_client = Trade(api_key=user.api_key, api_secret=user.api_secret)
         symbol = user.pair.replace("/", "")
+        fail_count = 0
     except Exception as e:
         logger.error(f"Ошибка при инициализации мониторинга: {e}")
         await message.answer("Ошибка при запуске мониторинга.")
@@ -65,3 +67,8 @@ async def monitor_order(message: Message, order_id: str, user_order_number: int)
         except Exception as e:
             logger.error(f"Ошибка в мониторинге ордера {order_id}: {e}")
             await asyncio.sleep(60)
+            fail_count += 1
+            if fail_count >= MAX_FAILS:
+                logger.error(f"Мониторинг ордера {order_id} остановлен после {MAX_FAILS} неудачных попыток")
+                return
+            continue
