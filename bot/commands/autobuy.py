@@ -28,7 +28,6 @@ async def autobuy_loop(message: Message, telegram_id: int):
         while True:
             try:
                 # Проверка подписки
-                user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
                 subscription = await sync_to_async(
                     Subscription.objects.filter(user=user).order_by('-expires_at').first
                 )()
@@ -54,7 +53,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
                     handle_mexc_response(buy_order, "Покупка")
                     order_id = buy_order["orderId"]
 
-                    # 2. Подтягиваем детали через query_order
+                    # Подтягиваем детали ордера
                     order_info = trade_client.query_order(symbol, {"orderId": order_id})
                     logger.info(f"Детали ордера {order_id}: {order_info}")
 
@@ -63,15 +62,14 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         await message.answer("❗ Ошибка при создании ордера (executedQty=0).")
                         return
 
-                    spent = float(order_info["cummulativeQuoteQty"])  # 0.999371
+                    spent = float(order_info["cummulativeQuoteQty"])
                     if spent == 0:
                         await message.answer("❗ Ошибка при создании ордера (spent=0).")
                         return
                     
                     real_price = spent / executed_qty if executed_qty > 0 else 0
                     
-                    # 4. Считаем цену продажи
-                    profit_percent = float(user.profit)
+                    # Расчёт цены продажи
                     sell_price = round(real_price * (1 + profit_percent / 100), 6)
                     last_buy_price = real_price
 
@@ -85,11 +83,9 @@ async def autobuy_loop(message: Message, telegram_id: int):
                     sell_order_id = sell_order["orderId"]
                     logger.info(f"SELL ордер {sell_order_id} выставлен на {sell_price:.6f} {symbol[3:]}")
                     sell_order_info = trade_client.query_order(symbol, {"orderId": sell_order_id})
+
                     # Сохраняем ордер в базу
-                    # Получаем следующий номер
-                    last_number = await sync_to_async(
-                        lambda: Deal.objects.filter(user=user).count()
-                    )()
+                    last_number = await sync_to_async(Deal.objects.filter(user=user).count)()
                     user_order_number = last_number + 1
                     
                     await sync_to_async(Deal.objects.create)(
@@ -135,15 +131,15 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         still_active.append(sell_order_info)
                 active_orders = still_active
 
-                # Настройка интервалов
+                # Интервалы между проверками
                 short_check_interval = 7  # сек — частота проверки активных ордеров
 
                 if not active_orders:
                     last_buy_price = None
                     logger.info(f"Пауза автобая для юзера {telegram_id}: {user.pause} секунд ")
                     await asyncio.sleep(user.pause)
-                # Последняя строка перед концом цикла:
                 await asyncio.sleep(short_check_interval if active_orders else user.pause)
+
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -160,13 +156,13 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         del user_autobuy_tasks[telegram_id]
                     break
                 await asyncio.sleep(30)
-                continue
 
     except asyncio.CancelledError:
         raise
     except Exception as e:
         logger.error(f"Ошибка в autobuy_loop при запуске для {telegram_id}: {e}")
         await message.answer(f"❌ Произошла ошибка при запуске AutoBuy: {e}")
+
 
 
 
