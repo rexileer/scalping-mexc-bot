@@ -140,9 +140,15 @@ async def buy_handler(message: Message):
         logger.info(f"SELL ордер {sell_order_id} выставлен на {sell_price:.6f} {symbol[3:]}")
 
         # 6. Сохраняем ордер в базу
+        # Получаем следующий номер
+        last_number = await sync_to_async(
+            lambda: Deal.objects.filter(user=user).count()
+        )()
+        user_order_number = last_number + 1
         deal = await sync_to_async(Deal.objects.create)(
             user=user,
             order_id=sell_order_id,
+            user_order_number=user_order_number,
             symbol=symbol,
             buy_price=real_price,
             quantity=executed_qty,
@@ -152,19 +158,19 @@ async def buy_handler(message: Message):
 
         # 7. Отправляем ответ
         text = (
-            f"✅ КУПЛЕНО\n\n"
+            f"✅ <b>КУПЛЕНО</b>\n\n"
             f"{executed_qty:.2f} {symbol[:3]} по {real_price:.6f} {symbol[3:]}\n\n"
-            f"Потрачено\n"
+            f"<b>Потрачено</b>\n"
             f"{spent:.8f} {symbol[3:]}\n\n"
-            f"📈 ВЫСТАВЛЕНО\n\n"
+            f"📈 <b>ВЫСТАВЛЕНО</b>\n\n"
             f"{executed_qty:.2f} {symbol[:3]} по {sell_price:.6f} {symbol[3:]}"
         )
-        await message.answer(text)
+        await message.answer(text, parse_mode='HTML')
 
         logger.info(f"BUY + SELL for {user.telegram_id}: {executed_qty} {symbol} @ {real_price} -> {sell_price}")
 
         # 8. Запускаем фоновый мониторинг ордера
-        asyncio.create_task(monitor_order(message, sell_order_id))
+        asyncio.create_task(monitor_order(message, sell_order_id, user_order_number))
 
     except Exception as e:
         logger.exception("Ошибка при выполнении /buy")

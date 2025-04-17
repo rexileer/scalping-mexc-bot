@@ -101,7 +101,7 @@ async def handle_stats_callback(callback_query: CallbackQuery):
             deal_time = deal.created_at.astimezone(MOSCOW_TZ)
 
             stats_message += (
-                f"\n🧾 <b>{deal.order_id}</b> {autobuy}\n"
+                f"\n🧾 <b>{deal.user_order_number}</b> {autobuy}\n"
                 f"{amount:.4f} {deal.symbol[:3]}\n"
                 f"🔹 Куплено по: {buy_price:.5f} ({total_buy:.2f} {deal.symbol[3:]})\n"
                 f"🔸 Продано по: {sell_price:.5f} ({total_sell:.2f} {deal.symbol[3:]})\n"
