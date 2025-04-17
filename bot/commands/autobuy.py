@@ -9,20 +9,6 @@ from bot.utils.mexc import handle_mexc_response
 from mexc_sdk import Trade
 from logger import logger
 from decimal import Decimal
-from functools import wraps
-
-def with_mexc_handling(func):
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        try:
-            return await func(*args, **kwargs)
-        except Exception as e:
-            logger.exception(f"Неизвестная ошибка: {e}")
-            message = next((arg for arg in args if isinstance(arg, Message)), None)
-            if message:
-                await message.answer(f"❌ Произошла непредвиденная ошибка:\n`{e}`", parse_mode="Markdown")
-            await asyncio.sleep(30)
-    return wrapper
 
 async def autobuy_loop(message: Message, telegram_id: int):
     try:
@@ -158,6 +144,10 @@ async def autobuy_loop(message: Message, telegram_id: int):
 
     except asyncio.CancelledError:
         raise
+    except Exception as e:
+        logger.error(f"Ошибка в autobuy_loop для {telegram_id}: {e}")
+        await message.answer(f"❌ Произошла ошибка в AutoBuy: {e}")
+        await asyncio.sleep(30)
 
 
 async def monitor_order_autobuy(
