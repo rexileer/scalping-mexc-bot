@@ -86,7 +86,6 @@ async def balance_handler(message: Message):
         logger.error(f"Ошибка при получении баланса для пользователя {message.from_user.id}: {e}")
         await message.answer("Произошла ошибка при получении баланса.")
 
-
 # /buy
 @router.message(Command("buy"))
 async def buy_handler(message: Message):
@@ -101,53 +100,60 @@ async def buy_handler(message: Message):
         trade_client = Trade(api_key=user.api_key, api_secret=user.api_secret)
         buy_amount = float(user.buy_amount)
 
-        # 1. ПОКУПКА по рынку на сумму
+        # 1. Создаём ордер
         buy_order = trade_client.new_order(symbol, "BUY", "MARKET", {
             "quoteOrderQty": buy_amount
         })
         handle_mexc_response(buy_order, "Покупка через /buy")
 
-        # 2. Получаем данные из ордера
-        executed_qty = float(buy_order["executedQty"])
-        avg_price = float(buy_order["fills"][0]["price"])
+        order_id = buy_order["orderId"]
 
-        # executed_qty = 100  # заглушка
-        # avg_price = 120  # заглушка
+        # 2. Подтягиваем детали через query_order
+        order_info = trade_client.query_order(symbol, {"orderId": order_id})
+        logger.info(f"Детали ордера {order_id}: {order_info}")
 
+        # 3. Получаем количество и среднюю цену
+        executed_qty = float(order_info.get("executedQty", 0))
+        if executed_qty == 0:
+            await message.answer("❗ Ошибка при создании ордера (executedQty=0).")
+            return
 
-        spent = executed_qty * avg_price  # фактически потрачено
-
-        # 3. Считаем цену продажи
+        spent = float(order_info["cummulativeQuoteQty"])  # 0.999371
+        if spent == 0:
+            await message.answer("❗ Ошибка при создании ордера (spent=0).")
+            return
+        
+        real_price = spent / executed_qty if executed_qty > 0 else 0
+        
+        # 4. Считаем цену продажи
         profit_percent = float(user.profit)
-        sell_price = round(avg_price * (1 + profit_percent / 100), 6)
+        sell_price = round(real_price * (1 + profit_percent / 100), 6)
 
-        # 4. ВЫСТАВЛЯЕМ лимитный SELL ордер
+        # 5. Выставляем лимитный SELL ордер
         sell_order = trade_client.new_order(symbol, "SELL", "LIMIT", {
             "quantity": executed_qty,
             "price": f"{sell_price:.6f}",
             "timeInForce": "GTC"
         })
         handle_mexc_response(sell_order, "Продажа")
-        # Сохраняем ордер в базе данных как покупку
-        order_id = sell_order['orderId']
+        sell_order_id = sell_order["orderId"]
+        logger.info(f"SELL ордер {sell_order_id} выставлен на {sell_price:.6f} {symbol[3:]}")
+
+        # 6. Сохраняем ордер в базу
         deal = await sync_to_async(Deal.objects.create)(
             user=user,
-            order_id=order_id,
+            order_id=sell_order_id,
             symbol=symbol,
-            buy_price=avg_price,  # Цена покупки
+            buy_price=real_price,
             quantity=executed_qty,
-            status="BUY_ORDER_PLACED"
+            sell_price=sell_price,
+            status="SELL_ORDER_PLACED"
         )
 
-        # Обновляем ордер на продажу в базе данных
-        deal.sell_price = sell_price
-        deal.status = "SELL_ORDER_PLACED"
-        deal.save()
-
-        # 5. Формируем красивый ответ
+        # 7. Отправляем ответ
         text = (
             f"✅ КУПЛЕНО\n\n"
-            f"{executed_qty:.2f} {symbol[:3]} по {avg_price:.6f} {symbol[3:]}\n\n"
+            f"{executed_qty:.2f} {symbol[:3]} по {real_price:.6f} {symbol[3:]}\n\n"
             f"Потрачено\n"
             f"{spent:.8f} {symbol[3:]}\n\n"
             f"📈 ВЫСТАВЛЕНО\n\n"
@@ -155,14 +161,14 @@ async def buy_handler(message: Message):
         )
         await message.answer(text)
 
-        logger.info(f"BUY + SELL for {user.telegram_id}: {executed_qty} {symbol} @ {avg_price} -> {sell_price}")
-        # 4. Запускаем фоновый мониторинг ордера
-        asyncio.create_task(monitor_order(message, order_id))
-        logger.info(f"Monitoring order {buy_order['orderId']} for user {user.telegram_id}.")
+        logger.info(f"BUY + SELL for {user.telegram_id}: {executed_qty} {symbol} @ {real_price} -> {sell_price}")
+
+        # 8. Запускаем фоновый мониторинг ордера
+        asyncio.create_task(monitor_order(message, sell_order_id))
+
     except Exception as e:
-        logger.error(f"Ошибка при /buy для {message.from_user.id}: {e}")
-        error_text = f"❌ Ошибка при выполнении сделки:\n\n{str(e)}"
-        await message.answer(error_text)
+        logger.exception("Ошибка при выполнении /buy")
+        await message.answer(f"❗ Ошибка при покупке: {e}")
 
 
 # /auto_buy
