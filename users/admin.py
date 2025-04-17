@@ -8,4 +8,4 @@ class UserAdmin(admin.ModelAdmin):
     
 @admin.register(Deal)
 class DealAdmin(admin.ModelAdmin):
-    list_display = ('user', 'order_id', 'symbol', 'quantity', 'buy_price', 'sell_price', 'status', 'created_at', 'updated_at', 'is_autobuy')
+    list_display = ('user', 'user_order_number', 'order_id', 'symbol', 'quantity', 'buy_price', 'sell_price', 'status', 'created_at', 'updated_at', 'is_autobuy')

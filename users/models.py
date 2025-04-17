@@ -38,6 +38,7 @@ class User(models.Model):
 class Deal(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     order_id = models.CharField(max_length=64)
+    user_order_number = models.PositiveIntegerField(null=True, blank=True)
     symbol = models.CharField(max_length=20)
     buy_price = models.DecimalField(max_digits=20, decimal_places=8)  # Стоимость покупки
     sell_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)  # Стоимость продажи
