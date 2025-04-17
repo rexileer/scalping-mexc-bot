@@ -6,6 +6,7 @@ from users.models import Deal, User
 from subscriptions.models import Subscription
 from bot.utils.user_autobuy_tasks import user_autobuy_tasks
 from bot.utils.mexc import handle_mexc_response
+from bot.utils.api_errors import parse_mexc_error
 from mexc_sdk import Trade
 from logger import logger
 from decimal import Decimal
@@ -143,7 +144,9 @@ async def autobuy_loop(message: Message, telegram_id: int):
                 raise
             except Exception as e:
                 logger.error(f"Ошибка в autobuy_loop для {telegram_id}: {e}")
-                await message.answer(f"❌ Произошла ошибка в AutoBuy: {e}")
+                error_message = parse_mexc_error(e)
+                user_message = f"❌ {error_message}"
+                await message.answer(user_message)
                 fail_count += 1
                 if fail_count >= MAX_FAILS:
                     await message.answer("⛔ Максимальное количество ошибок достигнуто. Автобай остановлен.")

@@ -13,6 +13,8 @@ from asgiref.sync import sync_to_async
 from mexc_sdk import Trade  # Предполагаем, что именно этот класс отвечает за торговые операции
 from django.utils.timezone import localtime
 from bot.utils.mexc import handle_mexc_response
+from bot.utils.api_errors import parse_mexc_error
+
 
 router = Router()
 
@@ -174,7 +176,8 @@ async def buy_handler(message: Message):
 
     except Exception as e:
         logger.exception("Ошибка при выполнении /buy")
-        await message.answer(f"❗ Ошибка при покупке: {e}")
+        user_message = f"❌ {parse_mexc_error(e)}"
+        await message.answer(user_message)
 
 
 # /auto_buy
