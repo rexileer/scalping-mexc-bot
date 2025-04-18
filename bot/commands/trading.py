@@ -12,9 +12,8 @@ from bot.keyboards.inline import get_period_keyboard
 from asgiref.sync import sync_to_async
 from mexc_sdk import Trade  # Предполагаем, что именно этот класс отвечает за торговые операции
 from django.utils.timezone import localtime
-from bot.utils.mexc import handle_mexc_response
+from bot.utils.mexc import handle_mexc_response, get_actual_order_status
 from bot.utils.api_errors import parse_mexc_error
-
 
 router = Router()
 
@@ -219,44 +218,48 @@ async def stop_autobuy(message: Message):
         await message.answer("⚠️ Автобай не был запущен.")
 
 
-# /status
 @router.message(Command("status"))
 async def status_handler(message: Message):
     telegram_id = message.from_user.id
+
     try:
         user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
 
-        if not user.autobuy:
-            await message.answer("⏸ AutoBuy не запущен.")
-            return
+        text = "🔁 <b>Автобай запущен.</b>" if user.autobuy else "⚠️ <b>Автобай не запущен.</b>"
 
-        last_deal = await sync_to_async(
-            lambda: Deal.objects.filter(user=user, is_autobuy=True).order_by("-created_at").first()
-        )()
+        # Получаем активные ордера со статусом "SELL_ORDER_PLACED"
+        deals_qs = Deal.objects.filter(user=user, status__in=["SELL_ORDER_PLACED", "PARTIALLY_FILLED", "NEW"]).order_by("-created_at")
+        active_deals = await sync_to_async(list)(deals_qs)
 
-        if not last_deal:
-            await message.answer("🔁 AutoBuy запущен.\nОжидается первая сделка...")
-            return
+        if active_deals:
+            formatted_deals = []
 
-        updated = localtime(last_deal.updated_at).strftime('%d.%m %H:%M')
+            for deal in reversed(active_deals):  # От старых к новым
+                real_status = await sync_to_async(get_actual_order_status)(user, deal.symbol, deal.order_id)
+                deal.status = real_status
+                deal.save()
+                logger.info(f"Статус ордера {deal.user_order_number}: {real_status}")
+                if real_status != "NEW" and real_status != "PARTIALLY_FILLED":
+                    continue
+                date_str = localtime(deal.created_at).strftime("%d %B %Y %H:%M:%S")
+                autobuy_note = " (AutoBuy)" if deal.is_autobuy else ""
+                symbol = deal.symbol
 
-        status_text = {
-            "SELL_ORDER_PLACED": "⏳ Ожидает продажи",
-            "FILLED": "✅ Сделка исполнена",
-            "CANCELLED": "❌ Отменена",
-        }.get(last_deal.status, f"📌 Статус: {last_deal.status}")
+                formatted = (
+                    f"<u>{deal.user_order_number}. Ордер на продажу{autobuy_note}</u>\n\n"
+                    f"<b>{deal.quantity:.2f} {symbol[:3]}</b>\n"
+                    f"- Куплено по <b>{deal.buy_price:.6f}</b> (<b>{deal.buy_price * deal.quantity:.2f}</b> {symbol[3:]})\n"
+                    f"- Продается по <b>{deal.sell_price:.6f}</b> (<b>{deal.sell_price * deal.quantity:.2f}</b> {symbol[3:]})\n\n"
+                    f"<i>{date_str}</i>\n"
+                )
+                formatted_deals.append(formatted)
 
-        text = (
-            f"🔁 *AutoBuy активен*\n"
-            f"Пара: *{last_deal.symbol}*\n\n"
-            f"{status_text}\n"
-            f"{last_deal.quantity:.4f} {last_deal.symbol[:3]} по {last_deal.sell_price:.4f} {last_deal.symbol[3:]}\n"
-            f"Обновлено: {updated}"
-        )
+            text += "\n\n" + "\n\n".join(formatted_deals)
 
-        await message.answer(text, parse_mode="Markdown")
+        await message.answer(text, parse_mode="HTML")
+
         logger.info(f"User {telegram_id} requested autobuy status.")
-        
+
     except Exception as e:
         logger.error(f"Ошибка при получении статуса для пользователя {telegram_id}: {e}")
         await message.answer("❌ Ошибка при получении статуса.")

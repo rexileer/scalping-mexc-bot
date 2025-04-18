@@ -5,6 +5,20 @@ import requests
 from mexc_sdk import Spot
 from users.models import User
 from logger import logger
+from mexc_sdk import Trade
+
+def get_actual_order_status(user: User, symbol: str, order_id: str) -> str:
+    trade_client = Trade(user.api_key, user.api_secret)
+    try:
+        response = trade_client.query_order(
+            symbol=symbol,
+            options={"orderId": order_id}
+        )
+        return response.get("status", "UNKNOWN")
+    except Exception as e:
+        # Можно тут логировать ошибку и вернуть UNKNOWN
+        print(f"Error getting order status: {e}")
+        return "ERROR"
 
 def check_mexc_keys(api_key: str, api_secret: str) -> bool:
     url = "https://api.mexc.com/api/v3/account"
