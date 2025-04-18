@@ -54,7 +54,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         drop_percent = (last_buy_price - current_price) / last_buy_price * 100
                         await message.answer(
                             f"⚠️ *Обнаружено падение цены*\n\n"
-                            f"🔻 Цена снизилась на `{drop_percent:.2f}%` от последней покупки `{last_buy_price:.6f}` {symbol[3:]}\n",
+                            f"🔻 Цена снизилась на `{drop_percent:.2f}%` от покупки по `{last_buy_price:.6f}` {symbol[3:]}\n",
                             parse_mode="Markdown"
                         )
                     buy_order = trade_client.new_order(symbol, "BUY", "MARKET", {"quoteOrderQty": buy_amount})
