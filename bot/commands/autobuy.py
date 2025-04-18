@@ -17,9 +17,6 @@ async def autobuy_loop(message: Message, telegram_id: int):
         user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
         trade_client = Trade(api_key=user.api_key, api_secret=user.api_secret)
         symbol = user.pair.replace("/", "")
-        buy_amount = float(user.buy_amount)
-        profit_percent = float(user.profit)
-        loss_threshold = float(user.loss)
 
         active_orders = []
         last_buy_price = None
@@ -40,7 +37,10 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         del user_autobuy_tasks[telegram_id]
                     await message.answer("⛔ Ваша подписка закончилась. Автобай остановлен.")
                     break
-
+                user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
+                buy_amount = float(user.buy_amount)
+                profit_percent = float(user.profit)
+                loss_threshold = float(user.loss)
                 # Получение текущей цены
                 ticker_data = trade_client.ticker_price(symbol)
                 handle_mexc_response(ticker_data, "Получение цены")
@@ -48,7 +48,15 @@ async def autobuy_loop(message: Message, telegram_id: int):
 
                 # Проверка условий для покупки
                 price_dropped = last_buy_price and ((last_buy_price - current_price) / last_buy_price * 100) >= loss_threshold
+                                   
                 if not last_buy_price or price_dropped:
+                    if price_dropped:
+                        drop_percent = (last_buy_price - current_price) / last_buy_price * 100
+                        await message.answer(
+                            f"⚠️ *Обнаружено падение цены*\n\n"
+                            f"🔻 Цена снизилась на `{drop_percent:.2f}%` от последней покупки `{last_buy_price:.6f}` {symbol[3:]}\n",
+                            parse_mode="Markdown"
+                        )
                     buy_order = trade_client.new_order(symbol, "BUY", "MARKET", {"quoteOrderQty": buy_amount})
                     handle_mexc_response(buy_order, "Покупка")
                     order_id = buy_order["orderId"]
@@ -124,15 +132,13 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         trade_client=trade_client,
                         symbol=symbol,
                         order_info=sell_order_info,
-                        telegram_id=telegram_id,
-                        loss_threshold=loss_threshold,
                     )
                     if result == "ACTIVE":
                         still_active.append(sell_order_info)
                 active_orders = still_active
 
                 # Интервалы между проверками
-                short_check_interval = 7  # сек — частота проверки активных ордеров
+                short_check_interval = 2  # сек — частота проверки активных ордеров
 
                 if not active_orders:
                     last_buy_price = None
@@ -173,8 +179,6 @@ async def monitor_order_autobuy(
     trade_client: Trade,
     symbol: str,
     order_info: dict,
-    telegram_id: int,
-    loss_threshold: float,
 ):
     try:
         order_id = order_info["order_id"]
@@ -222,27 +226,14 @@ async def monitor_order_autobuy(
             )
             return "FILLED"
 
-        # Уведомление при падении цены
-        price_data = trade_client.ticker_price(symbol)
-        handle_mexc_response(price_data, "Проверка цены")
-        current_price = float(price_data["price"])
-        drop_percent = ((buy_price - current_price) / buy_price) * 100
-        # logger.info(f"Падение цены для ордера {order_id}: {drop_percent:.2f}%")
-
-        if drop_percent >= loss_threshold and not order_info["notified"]:
-            await message.answer(
-                f"⚠️ *Падение цены по активному ордеру*\n\n"
-                f"📉 Текущая цена: `{current_price:.6f}` {symbol[3:]}\n"
-                f"🔻 Падение: `{drop_percent:.2f}%`\n",
-                parse_mode="Markdown"
-            )
-            order_info["notified"] = True
-
         return "ACTIVE"
 
     except asyncio.CancelledError:
         return "CANCELLED"
     except Exception as e:
         logger.error(f"Ошибка мониторинга ордера {order_id}: {e}")
-        await message.answer(f"⚠️ Ошибка при проверке ордера {order_id}: {e}")
+        error_message = parse_mexc_error(e)
+        user_message = f"❌ {error_message}"
+        await message.answer(f"⚠️ Ошибка при проверке ордера {user_order_number}:")
+        await message.answer(user_message)
         return "ACTIVE"
