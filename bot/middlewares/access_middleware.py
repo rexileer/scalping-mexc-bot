@@ -18,9 +18,10 @@ class AccessMiddleware(BaseMiddleware):
         event: Update,
         data: Dict[str, Any]
     ) -> Any:
-        message = event.message
+        # Проверяем, что событие — это сообщение
+        if isinstance(event, Message):
+            message = event
 
-        if message:
             telegram_user = message.from_user
 
             try:
