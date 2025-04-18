@@ -14,7 +14,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-
+from bot.daily_stats import send_daily_statistics
 from bot.config import load_config
 from bot.logger import logger
 from bot.routers import setup_routers
@@ -34,11 +34,12 @@ async def main():
         dp = Dispatcher(storage=MemoryStorage())
 
         dp.include_router(setup_routers())
-        dp.update.middleware(AccessMiddleware())
+        dp.message.middleware(AccessMiddleware())
         dp.message.middleware(AuthMiddleware())
         
+        asyncio.create_task(send_daily_statistics(bot))
+        
         await set_default_commands(bot)
-
         logger.info("Bot started")
         await asyncio.gather(
             bot.delete_webhook(drop_pending_updates=True),
