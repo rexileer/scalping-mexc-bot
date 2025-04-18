@@ -28,7 +28,7 @@ async def monitor_order(message: Message, order_id: str, user_order_number: int)
             order_status = trade_client.query_order(symbol, options={"orderId": order_id})
             handle_mexc_response(order_status, "Проверка ордера")
             status = order_status.get("status")
-            logger.info(f"Статус ордера {user_order_number}: {status}")
+            # logger.info(f"Статус ордера {user_order_number}: {status}")
             if status == "CANCELED":
                 deal.status = "CANCELED"
                 deal.updated_at = timezone.now()
@@ -63,7 +63,7 @@ async def monitor_order(message: Message, order_id: str, user_order_number: int)
                 return
 
 
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
         except Exception as e:
             logger.error(f"Ошибка в мониторинге ордера {order_id}: {e}")
             await asyncio.sleep(60)
