@@ -82,7 +82,10 @@ async def handle_stats_callback(callback_query: CallbackQuery):
         user, deals = await get_user_and_deals(user_id, start_date, end_date)
 
         if not deals:
-            return
+            stats_message = (
+                f"<b>{period_label}</b>\n\n"
+                f"Количество сделок: 0\n"
+            )
         else:
             profit_total = 0
             percent_total = 0
