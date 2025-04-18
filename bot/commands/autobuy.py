@@ -170,6 +170,8 @@ async def autobuy_loop(message: Message, telegram_id: int):
     except Exception as e:
         logger.error(f"Ошибка в autobuy_loop при запуске для {telegram_id}: {e}")
         await message.answer(f"❌ Произошла ошибка при запуске AutoBuy: {e}")
+        user.autobuy = False
+        await sync_to_async(user.save)()
 
 
 
