@@ -24,8 +24,16 @@ async def send_daily_statistics(bot: Bot):
 
 
 async def process_and_send_stats(bot: Bot):
-    today = timezone.now().astimezone(MOSCOW_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
-    tomorrow = today + timedelta(days=1)
+    # Начало и конец дня в МСК, потом переводим в UTC
+    moscow_now = timezone.now().astimezone(MOSCOW_TZ)
+    today_msk = moscow_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_msk = today_msk + timedelta(days=1)
+
+    # Конвертируем в UTC
+    today = today_msk.astimezone(pytz.UTC)
+    tomorrow = tomorrow_msk.astimezone(pytz.UTC)
+
+    logger.info(f"Processing daily stats for range: {today} — {tomorrow} (UTC)")
 
     users = User.objects.all()
 
@@ -38,6 +46,7 @@ async def process_and_send_stats(bot: Bot):
         )
 
         if not deals.exists():
+            logger.info(f"No deals for user {user.telegram_id} on {today_msk.date()} (Moscow)")
             continue
 
         profit_total = 0
@@ -54,7 +63,7 @@ async def process_and_send_stats(bot: Bot):
 
         avg_profit_percent = percent_total / deals.count()
 
-        period_label = today.strftime('%d.%m.%Y')
+        period_label = today_msk.strftime('%d.%m.%Y')
         stats_message = (
             f"<b>{period_label}</b>\n\n"
             f"Количество сделок: {deals.count()}\n"
