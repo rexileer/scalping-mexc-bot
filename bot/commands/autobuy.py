@@ -170,7 +170,16 @@ async def autobuy_loop(message: Message, telegram_id: int):
             break
 
         except asyncio.CancelledError:
+            logger.info(f"Автобай для {telegram_id} был остановлен вручную.")
+            user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
+            user.autobuy = False
+            await sync_to_async(user.save)()
+            task = user_autobuy_tasks.get(telegram_id)
+            if task:
+                task.cancel()
+                del user_autobuy_tasks[telegram_id]
             raise
+
         except Exception as e:
             startup_fail_count += 1
             logger.error(f"Ошибка в autobuy_loop при запуске для {telegram_id}: {e}")
