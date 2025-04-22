@@ -14,10 +14,14 @@ def get_actual_order_status(user: User, symbol: str, order_id: str) -> str:
             symbol=symbol,
             options={"orderId": order_id}
         )
+        if not isinstance(response, dict):
+            logger.error(f"⚠️ Ответ не является dict: {type(response)} — {response}")
+            return "ERROR"
+
         return response.get("status", "UNKNOWN")
+
     except Exception as e:
-        # Можно тут логировать ошибку и вернуть UNKNOWN
-        print(f"Error getting order status: {e}")
+        logger.exception(f"Ошибка при получении статуса ордера {order_id}: {e}")
         return "ERROR"
 
 def check_mexc_keys(api_key: str, api_secret: str) -> bool:

@@ -235,24 +235,28 @@ async def status_handler(message: Message):
             formatted_deals = []
 
             for deal in reversed(active_deals):  # От старых к новым
-                real_status = await sync_to_async(get_actual_order_status)(user, deal.symbol, deal.order_id)
-                deal.status = real_status
-                deal.save()
-                logger.info(f"Статус ордера {deal.user_order_number}: {real_status}")
-                if real_status != "NEW" and real_status != "PARTIALLY_FILLED":
-                    continue
-                date_str = localtime(deal.created_at).strftime("%d %B %Y %H:%M:%S")
-                autobuy_note = " (AutoBuy)" if deal.is_autobuy else ""
-                symbol = deal.symbol
+                try:
+                    real_status = await sync_to_async(get_actual_order_status)(user, deal.symbol, deal.order_id)
+                    deal.status = real_status
+                    deal.save()
+                    logger.info(f"Статус ордера {deal.user_order_number}: {real_status}")
+                    if real_status != "NEW" and real_status != "PARTIALLY_FILLED":
+                        continue
+                    date_str = localtime(deal.created_at).strftime("%d %B %Y %H:%M:%S")
+                    autobuy_note = " (AutoBuy)" if deal.is_autobuy else ""
+                    symbol = deal.symbol
 
-                formatted = (
-                    f"<u>{deal.user_order_number}. Ордер на продажу{autobuy_note}</u>\n\n"
-                    f"<b>{deal.quantity:.2f} {symbol[:3]}</b>\n"
-                    f"- Куплено по <b>{deal.buy_price:.6f}</b> (<b>{deal.buy_price * deal.quantity:.2f}</b> {symbol[3:]})\n"
-                    f"- Продается по <b>{deal.sell_price:.6f}</b> (<b>{deal.sell_price * deal.quantity:.2f}</b> {symbol[3:]})\n\n"
-                    f"<i>{date_str}</i>\n"
-                )
-                formatted_deals.append(formatted)
+                    formatted = (
+                        f"<u>{deal.user_order_number}. Ордер на продажу{autobuy_note}</u>\n\n"
+                        f"<b>{deal.quantity:.2f} {symbol[:3]}</b>\n"
+                        f"- Куплено по <b>{deal.buy_price:.6f}</b> (<b>{deal.buy_price * deal.quantity:.2f}</b> {symbol[3:]})\n"
+                        f"- Продается по <b>{deal.sell_price:.6f}</b> (<b>{deal.sell_price * deal.quantity:.2f}</b> {symbol[3:]})\n\n"
+                        f"<i>{date_str}</i>\n"
+                    )
+                    formatted_deals.append(formatted)
+                except Exception as e:
+                    logger.error(f"Ошибка при обработке сделки {deal.user_order_number}: {e}")
+                    continue
 
             text += "\n\n" + "\n\n".join(formatted_deals)
 
