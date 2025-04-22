@@ -5,6 +5,7 @@ from django.utils import timezone
 from users.models import Deal
 from logger import logger
 from bot.utils.mexc import handle_mexc_response
+from bot.utils.api_errors import parse_mexc_error
 from mexc_sdk import Trade
 from bot.constants import MAX_FAILS
 
@@ -12,7 +13,6 @@ from bot.constants import MAX_FAILS
 async def monitor_order(message: Message, order_id: str, user_order_number: int):
     try:
         logger.info(f"Запуск мониторинга ордера {order_id} для пользователя {message.from_user.id}")
-        # Получаем клиента и пару для пользователя
         deal = await sync_to_async(Deal.objects.get)(order_id=order_id)
         user = deal.user
         trade_client = Trade(api_key=user.api_key, api_secret=user.api_secret)
@@ -20,7 +20,10 @@ async def monitor_order(message: Message, order_id: str, user_order_number: int)
         fail_count = 0
     except Exception as e:
         logger.error(f"Ошибка при инициализации мониторинга: {e}")
-        await message.answer("Ошибка при запуске мониторинга.")
+        error_message = parse_mexc_error(e)
+        user_message = f"❌ {error_message}"
+        await message.answer('⚠️ Ошибка при инициализации мониторинга для ордера', parse_mode='HTML')
+        await message.answer(user_message, parse_mode='HTML')
         return
 
     while True:
@@ -28,15 +31,16 @@ async def monitor_order(message: Message, order_id: str, user_order_number: int)
             order_status = trade_client.query_order(symbol, options={"orderId": order_id})
             handle_mexc_response(order_status, "Проверка ордера")
             status = order_status.get("status")
-            # logger.info(f"Статус ордера {user_order_number}: {status}")
+
             if status == "CANCELED":
                 deal.status = "CANCELED"
                 deal.updated_at = timezone.now()
                 await sync_to_async(deal.save)()
                 await message.answer(
-                    f"❌ СДЕЛКА {user_order_number} ОТМЕНЕНА\n\n "
+                    f"❌ <b>СДЕЛКА {user_order_number} ОТМЕНЕНА</b>\n\n"
                     f"🔁 Покупка: {deal.quantity:.2f} {deal.symbol[:3]} по {deal.buy_price:.6f} {deal.symbol[3:]}\n"
-                    f"📈 Продажа: {deal.quantity:.2f} {deal.symbol[:3]} по {deal.sell_price:.6f} {deal.symbol[3:]}\n\n"    
+                    f"📈 Продажа: {deal.quantity:.2f} {deal.symbol[:3]} по {deal.sell_price:.6f} {deal.symbol[3:]}\n",
+                    parse_mode='HTML'
                 )
                 return
 
@@ -62,13 +66,21 @@ async def monitor_order(message: Message, order_id: str, user_order_number: int)
                 await message.answer(text, parse_mode='HTML')
                 return
 
-
+            # Ордер ещё не исполнен
+            fail_count = 0  # сбрасываем счётчик ошибок
             await asyncio.sleep(5)
+
+        except asyncio.CancelledError:
+            logger.info(f"Мониторинг ордера {order_id} отменён вручную")
+            return
         except Exception as e:
-            logger.error(f"Ошибка в мониторинге ордера {order_id}: {e}")
-            await asyncio.sleep(60)
             fail_count += 1
+            logger.warning(f"Неудачная попытка мониторинга ордера {order_id} (попытка {fail_count}/{MAX_FAILS}): {e}")
+            await asyncio.sleep(5)
             if fail_count >= MAX_FAILS:
-                logger.error(f"Мониторинг ордера {order_id} остановлен после {MAX_FAILS} неудачных попыток")
+                logger.error(f"Мониторинг ордера {order_id} остановлен после {MAX_FAILS} ошибок")
+                error_message = parse_mexc_error(e)
+                user_message = f"❌ {error_message}"
+                await message.answer(f'⚠️ Ошибка при мониторинге ордера {user_order_number}', parse_mode='HTML')
+                await message.answer(user_message, parse_mode='HTML')
                 return
-            continue
