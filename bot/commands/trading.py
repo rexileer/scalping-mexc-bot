@@ -52,19 +52,26 @@ async def balance_handler(message: Message):
         account_info = client.account_info()
         logger.info(f"Account Info for {message.from_user.id}: {account_info}")
 
+        # Определим интересующие нас токены на основе пары
+        base_asset = pair[:-4]  # например, KAS или BTC
+        quote_asset = pair[-4:]  # например, USDT или USDC
+        relevant_assets = {base_asset, quote_asset}
+
         balances_message = "💰 <b>БАЛАНС</b>\n"
 
         for balance in account_info['balances']:
             asset = balance['asset']
+            if asset not in relevant_assets:
+                continue
+
             free = float(balance['free'])
             locked = float(balance['locked'])
 
-            if free > 0 or locked > 0:
-                balances_message += (
-                    f"\n<b>{asset}</b>\n"
-                    f"Доступно: {format(free, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}\n"
-                    f"Заморожено: {format(locked, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
-                )
+            balances_message += (
+                f"\n<b>{asset}</b>\n"
+                f"Доступно: {format(free, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}\n"
+                f"Заморожено: {format(locked, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
+            )
 
         orders = client.open_orders(symbol=pair)
         logger.info(f"Open Orders for {message.from_user.id}: {orders}")
@@ -76,16 +83,17 @@ async def balance_handler(message: Message):
         orders_message = (
             f"\n\n📄 <b>Ордера</b>\n"
             f"Количество: {format(total_order_amount, ',.0f').replace(',', ' ')}\n"
-            f"Сумма исполнения: {format(total_order_value, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')} USDT/USDC\n"
-            f"Средняя цена исполнения: {format(avg_price, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.')} USDT/USDC"
+            f"Сумма исполнения: {format(total_order_value, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.')} {quote_asset}\n"
+            f"Средняя цена исполнения: {format(avg_price, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.')} {quote_asset}"
         )
 
         await message.answer(balances_message + orders_message, parse_mode="HTML")
         logger.info(f"User {user.telegram_id} requested balance and orders.")
-    
+
     except Exception as e:
         logger.error(f"Ошибка при получении баланса для пользователя {message.from_user.id}: {e}")
         await message.answer("Произошла ошибка при получении баланса.")
+
 
 # /buy
 @router.message(Command("buy"))

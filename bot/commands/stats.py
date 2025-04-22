@@ -100,11 +100,13 @@ async def handle_stats_callback(callback_query: CallbackQuery):
                 percent_total += profit_percent
 
             avg_profit_percent = percent_total / len(deals)
+            
+            pair = user.pair
 
             stats_message = (
                 f"<b>{period_label}</b>\n\n"
                 f"Количество сделок: {len(deals)}\n"
-                f"Прибыль: {profit_total:.2f} USDT/USDC\n"
+                f"Прибыль: {profit_total:.2f} {pair[3:]}\n"
                 f"Средний % профита: {avg_profit_percent:.2f}%"
             )
 
