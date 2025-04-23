@@ -14,7 +14,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from bot.daily_stats import send_daily_statistics
+from bot.daily_stats import start_scheduler
 from bot.config import load_config
 from bot.logger import logger
 from bot.routers import setup_routers
@@ -37,7 +37,7 @@ async def main():
         dp.message.middleware(AccessMiddleware())
         dp.message.middleware(AuthMiddleware())
         
-        asyncio.create_task(send_daily_statistics(bot))
+        start_scheduler(bot)
         
         await set_default_commands(bot)
         logger.info("Bot started")
