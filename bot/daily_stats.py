@@ -10,52 +10,49 @@ from asgiref.sync import sync_to_async
 
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 DAILY_STATS_TIME = "00:00"  # Moscow time
-SUBSCRIPTION_WARNING_TIME = "22:50"  # Moscow time
 
 async def scheduler(bot: Bot):
     """Main scheduler function that runs multiple scheduled tasks"""
     logger.info("Starting scheduler")
     
     while True:
-        # Current time in Moscow timezone
-        now = timezone.now().astimezone(MOSCOW_TZ)
+        now = timezone.now()
         
-        # Calculate next daily stats run time (midnight Moscow time)
-        next_stats_run = now.replace(
+        # Вычисляем время следующего запуска
+        moscow_now = now.astimezone(MOSCOW_TZ)
+        next_stats_run = moscow_now.replace(
             hour=int(DAILY_STATS_TIME.split(':')[0]),
             minute=int(DAILY_STATS_TIME.split(':')[1]),
             second=0,
             microsecond=0
         )
-        if next_stats_run <= now:
+        if next_stats_run <= moscow_now:
             next_stats_run += timedelta(days=1)
-            
-        # Calculate next subscription warning run time (noon Moscow time)
-        next_sub_warning = now.replace(
-            hour=int(SUBSCRIPTION_WARNING_TIME.split(':')[0]),
-            minute=int(SUBSCRIPTION_WARNING_TIME.split(':')[1]),
-            second=0,
-            microsecond=0
-        )
-        if next_sub_warning <= now:
-            next_sub_warning += timedelta(days=1)
-            
-        # Find which task should run next
-        next_run = min(next_stats_run, next_sub_warning)
-        wait_seconds = max((next_run - now).total_seconds(), 0)
+        next_stats_run_utc = next_stats_run.astimezone(pytz.UTC)
         
-        task_name = "daily stats" if next_run == next_stats_run else "subscription warnings"
+        # Вычисляем время следующего запуска для проверки истекающих подписок каждые 6 часов
+        hours_since_epoch = now.timestamp() // 3600
+        next_sub_check_hours = (hours_since_epoch // 6 + 1) * 6
+        next_sub_check = timezone.datetime.fromtimestamp(
+            next_sub_check_hours * 3600, tz=pytz.UTC
+        )
+        
+        # Определяем время следующего запуска
+        next_run_time = min(next_stats_run_utc, next_sub_check)
+        wait_seconds = max((next_run_time - now).total_seconds(), 0)
+        
+        task_name = "daily stats" if next_run_time == next_stats_run_utc else "subscription checks"
         logger.info(f"Next scheduled task: {task_name} in {wait_seconds:.2f} seconds")
         
-        # Wait until the next task should run
+        # Ждем до следующего запуска
         await asyncio.sleep(wait_seconds)
         
-        # Run the appropriate task
-        if next_run == next_stats_run:
+        # Запускаем задачу
+        if next_run_time == next_stats_run_utc:
             logger.info("Running daily statistics task")
             await process_and_send_stats(bot)
         else:
-            logger.info("Running subscription warning task")
+            logger.info("Running subscription expiration checks")
             await check_subscription_expiration(bot)
 
 @sync_to_async
@@ -89,22 +86,22 @@ def get_expiring_subscriptions():
 
 async def process_and_send_stats(bot: Bot):
     """Process and send daily statistics to all users"""
-    # Calculate the date range for yesterday (Moscow time)
+    # Вычисляем даты
     moscow_now = timezone.now().astimezone(MOSCOW_TZ)
     yesterday_msk = moscow_now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
     today_msk = moscow_now.replace(hour=0, minute=0, second=0, microsecond=0)
     
-    # Convert to UTC for database queries
+    # Переводим в UTC
     yesterday = yesterday_msk.astimezone(pytz.UTC)
     today = today_msk.astimezone(pytz.UTC)
     
     logger.info(f"Processing daily stats for range: {yesterday} — {today} (UTC)")
     
-    # Get all users asynchronously
+    # Получаем всех пользователей
     users = await get_all_users()
     
     for user in users:
-        # Get deals for this user asynchronously
+        # Получаем сделки
         deals = await get_user_deals(user, yesterday, today)
         
         if not deals:
@@ -140,27 +137,42 @@ async def process_and_send_stats(bot: Bot):
             logger.error(f"Failed to send statistics to user {user.telegram_id}: {e}")
 
 async def check_subscription_expiration(bot: Bot):
-    """Check and notify users whose subscription expires tomorrow"""
-    expiring_subscriptions = await get_expiring_subscriptions()
+    """Check and notify users whose subscription expires tomorrow or in 36 hours"""
+    tomorrow = timezone.now() + timedelta(days=1)
+    hours_36_later = timezone.now() + timedelta(hours=36)
+    
+    # Получаем пользователей, чьи подписки заканчиваются завтра
+    expiring_subscriptions = await sync_to_async(list)(
+        Subscription.objects.filter(
+            expires_at__lte=hours_36_later
+        ).select_related('user')
+    )
     
     for subscription in expiring_subscriptions:
         user = subscription.user
-        expiration_date = subscription.expires_at.astimezone(MOSCOW_TZ).strftime('%d.%m.%Y')
+        hours_remaining = max(int((subscription.expires_at - timezone.now()).total_seconds() / 3600), 0)
         
+        # Пропускаем пользователей, чьи подписки заканчиваются в ближайшее время
+        if hours_remaining > 36 or hours_remaining < 1:
+            continue
+            
         warning_message = (
-            f"⚠️ <b>Предупреждение о подписке</b>\n\n"
-            f"Ваша подписка истекает завтра ({expiration_date}).\n"
-            f"Для продления подписки и продолжения работы бота, пожалуйста, "
-            f"воспользуйтесь командой /subscribe."
+            f"❗ *Подписка на бота закончится через {hours_remaining} часов* ❗\n\n"
+            f"*Для продления доступа на 30 дней*\n\n"
+            f"*1)* Оплатите *100 USDT* в сети *TRC20 (tron)* на кошелек\n"
+            f"`TCh1xdkncgoSELQwa35EC6hTAcwnu3E5XP` (нажмите для копирования).\n"
+            f"_При оплате учитывайте комиссию._\n\n"
+            f"*2)* Пришлите скрин оплаты с хэшем (TXID) из истории транзакций Вашего кошелька в ЛС @ScalpingBotSupport.\n\n"
+            f"_Обратите внимание!_\n"
+            f"В случае неоплаты доступ к боту будет автоматически закрыт и все Ваши данные будут удалены. При этом открытые ордера на бирже останутся."
         )
         
         try:
-            await bot.send_message(user.telegram_id, warning_message, parse_mode="HTML")
-            logger.info(f"Subscription expiration warning sent to {user.telegram_id}")
+            await bot.send_message(user.telegram_id, warning_message, parse_mode="Markdown")
+            logger.info(f"Subscription expiration warning sent to {user.telegram_id}, {hours_remaining} hours remaining")
         except Exception as e:
             logger.error(f"Failed to send subscription warning to user {user.telegram_id}: {e}")
 
-# Function to initialize the scheduler when the bot starts
 def start_scheduler(bot: Bot):
     """Start the scheduler as a background task"""
     asyncio.create_task(scheduler(bot))
