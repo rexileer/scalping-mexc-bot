@@ -129,6 +129,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
 
                     # Проверка активных ордеров
                     still_active = []
+                    orders_changed = False
                     for sell_order_info in active_orders:
                         result = await monitor_order_autobuy(
                             message=message,
@@ -138,8 +139,21 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         )
                         if result == "ACTIVE":
                             still_active.append(sell_order_info)
+                        else:
+                            orders_changed = True
+                            
                     active_orders = still_active
-
+                    
+                    # Обновление last_buy_price
+                    if orders_changed:
+                        if active_orders:
+                            most_recent_order = max(active_orders, key=lambda x: x.get("user_order_number", 0))
+                            last_buy_price = most_recent_order["buy_price"]
+                            logger.info(f"Updated last_buy_price to {last_buy_price} from order #{most_recent_order['user_order_number']}")
+                        else:
+                            last_buy_price = None
+                            logger.info("Reset last_buy_price to None as no active orders remain")
+                            
                     # Интервалы между проверками
                     short_check_interval = 2  # сек — частота проверки активных ордеров
 
@@ -152,13 +166,11 @@ async def autobuy_loop(message: Message, telegram_id: int):
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.error(f"Ошибка в autobuy_loop для {telegram_id}: {e}")
-                    error_message = parse_mexc_error(e)
-                    user_message = f"❌ {error_message}\n\nПауза между попытками: 30 секунд."
-                    await message.answer(user_message)
+                    logger.error(f"Ошибка в autobuy_loop для {telegram_id}, пауза автобая 30 секунд: {e}")
                     fail_count += 1
                     if fail_count >= MAX_FAILS:
-                        await message.answer("⛔ Максимальное количество ошибок достигнуто. Автобай остановлен.")
+                        error_message = parse_mexc_error(e)
+                        await message.answer(f"⛔ {error_message}\n\n  Автобай остановлен.")
                         user.autobuy = False
                         await sync_to_async(user.save)()
                         task = user_autobuy_tasks.get(telegram_id)
