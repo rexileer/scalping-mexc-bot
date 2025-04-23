@@ -57,13 +57,13 @@ async def monitor_order(message: Message, order_id: str, user_order_number: int)
                 quote = symbol[3:]
 
                 text = (
-                    f"✅ <b>СДЕЛКА {user_order_number} ИСПОЛНЕНА</b>\n\n"
-                    f"🔁 Покупка: {deal.quantity:.2f} {base} по {deal.buy_price:.6f} {quote}\n"
-                    f"📈 Продажа: {deal.quantity:.2f} {base} по {deal.sell_price:.6f} {quote}\n\n"
-                    f"💰 Прибыль: {profit:+.6f} {quote}"
+                    f"✅ *СДЕЛКА {user_order_number} ЗАВЕРШЕНА*\n\n"
+                    f"📦 Кол-во: `{deal.quantity:.4f}` {base}\n"
+                    f"💰 Продано по: `{deal.sell_price:.6f}` {quote}\n"
+                    f"📊 Прибыль: `{profit:.2f}` {quote}"
                 )
 
-                await message.answer(text, parse_mode='HTML')
+                await message.answer(text, parse_mode='Markdown')
                 return
 
             # Ордер ещё не исполнен

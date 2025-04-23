@@ -166,15 +166,14 @@ async def buy_handler(message: Message):
         )
 
         # 7. Отправляем ответ
-        text = (
-            f"✅ <b>КУПЛЕНО</b>\n\n"
-            f"{executed_qty:.2f} {symbol[:3]} по {real_price:.6f} {symbol[3:]}\n\n"
-            f"<b>Потрачено</b>\n"
-            f"{spent:.8f} {symbol[3:]}\n\n"
-            f"📈 <b>ВЫСТАВЛЕНО</b>\n\n"
-            f"{executed_qty:.2f} {symbol[:3]} по {sell_price:.6f} {symbol[3:]}"
+        await message.answer(
+            f"🟢 *СДЕЛКА {user_order_number} ОТКРЫТА*\n\n"
+            f"📉 Куплено по: `{real_price:.6f}` {symbol[3:]}\n"
+            f"📦 Кол-во: `{executed_qty:.4f}` {symbol[:3]}\n"
+            f"💸 Потрачено: `{spent:.2f}` {symbol[3:]}\n\n"
+            f"📈 Лимит на продажу: `{sell_price:.6f}` {symbol[3:]}",
+            parse_mode="Markdown"
         )
-        await message.answer(text, parse_mode='HTML')
 
         logger.info(f"BUY + SELL for {user.telegram_id}: {executed_qty} {symbol} @ {real_price} -> {sell_price}")
 
