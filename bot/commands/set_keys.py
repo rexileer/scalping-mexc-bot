@@ -67,7 +67,7 @@ async def get_api_secret(message: Message, state: FSMContext):
     # Сохранение API ключей в базе данных
     try:
         await save_api_keys(message.from_user.id, api_key, api_secret)
-        await message.answer("✅ Ключи успешно сохранены.")
+        await message.answer("✅ Ключи успешно сохранены.\nДля запуска бота нажмите команду /start")
     except Exception as e:
         await message.answer(f"Ошибка при сохранении ключей: {e}")
     finally:

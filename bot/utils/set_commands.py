@@ -13,6 +13,6 @@ async def set_default_commands(bot: Bot):
         BotCommand(command="/subscription", description="Подписка"),
         BotCommand(command="/stop", description="Стоп"),
         BotCommand(command="/faq", description="FAQ"),
-        BotCommand(command="/set_keys", description="Авторизация MEXC/Установка ключей"),
+        # BotCommand(command="/set_keys", description="Авторизация MEXC/Установка ключей"),
     ]
     await bot.set_my_commands(commands)
