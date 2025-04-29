@@ -232,42 +232,58 @@ async def status_handler(message: Message):
     try:
         user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
 
-        text = "🔁 <b>Автобай запущен.</b>" if user.autobuy else "⚠️ <b>Автобай не запущен.</b>"
+        header = "🔁 <b>Автобай запущен.</b>" if user.autobuy else "⚠️ <b>Автобай не запущен.</b>"
 
-        # Получаем активные ордера со статусом "SELL_ORDER_PLACED"
-        deals_qs = Deal.objects.filter(user=user, status__in=["SELL_ORDER_PLACED", "PARTIALLY_FILLED", "NEW"]).order_by("-created_at")
+        # Получаем активные ордера
+        deals_qs = Deal.objects.filter(
+            user=user,
+            status__in=["SELL_ORDER_PLACED", "PARTIALLY_FILLED", "NEW"]
+        ).order_by("-created_at")
         active_deals = await sync_to_async(list)(deals_qs)
 
-        if active_deals:
-            formatted_deals = []
+        chunks = []
+        current_chunk = header
+        MAX_LENGTH = 4000  # с запасом от лимита Telegram
 
+        if active_deals:
             for deal in reversed(active_deals):  # От старых к новым
                 try:
-                    real_status = await sync_to_async(get_actual_order_status)(user, deal.symbol, deal.order_id)
+                    real_status = await sync_to_async(get_actual_order_status)(
+                        user, deal.symbol, deal.order_id
+                    )
                     deal.status = real_status
                     deal.save()
-                    logger.info(f"Статус ордера {deal.user_order_number}: {real_status}")
-                    if real_status != "NEW" and real_status != "PARTIALLY_FILLED":
+
+                    if real_status not in ["NEW", "PARTIALLY_FILLED"]:
                         continue
+
                     date_str = localtime(deal.created_at).strftime("%d %B %Y %H:%M:%S")
                     autobuy_note = " (AutoBuy)" if deal.is_autobuy else ""
                     symbol = deal.symbol
 
                     formatted = (
-                        f"<u>{deal.user_order_number}. Ордер на продажу{autobuy_note}</u>\n\n"
+                        f"\n\n<u>{deal.user_order_number}. Ордер на продажу{autobuy_note}</u>\n\n"
                         f"<b>{deal.quantity:.2f} {symbol[:3]}</b>\n"
                         f"- Куплено по <b>{deal.buy_price:.6f}</b> (<b>{deal.buy_price * deal.quantity:.2f}</b> {symbol[3:]})\n"
                         f"- Продается по <b>{deal.sell_price:.6f}</b> (<b>{deal.sell_price * deal.quantity:.2f}</b> {symbol[3:]})\n\n"
-                        f"<i>{date_str}</i>\n"
+                        f"<i>{date_str}</i>"
                     )
-                    formatted_deals.append(formatted)
+
+                    if len(current_chunk) + len(formatted) > MAX_LENGTH:
+                        chunks.append(current_chunk)
+                        current_chunk = formatted
+                    else:
+                        current_chunk += formatted
+
                 except Exception as e:
                     logger.error(f"Ошибка при обработке сделки {deal.user_order_number}: {e}")
                     continue
 
-            text += "\n\n" + "\n\n".join(formatted_deals)
+        if current_chunk:
+            chunks.append(current_chunk)
 
-        await message.answer(text, parse_mode="HTML")
+        for chunk in chunks:
+            await message.answer(chunk, parse_mode="HTML")
 
         logger.info(f"User {telegram_id} requested autobuy status.")
 
