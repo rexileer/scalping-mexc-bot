@@ -6,6 +6,7 @@ from mexc_sdk import Spot
 from users.models import User
 from logger import logger
 from mexc_sdk import Trade
+from utils.api_errors import parse_mexc_error
 
 def get_actual_order_status(user: User, symbol: str, order_id: str) -> str:
     trade_client = Trade(user.api_key, user.api_secret)
@@ -39,8 +40,11 @@ def check_mexc_keys(api_key: str, api_secret: str) -> bool:
     
     logger.info(f"Response status code: {response.status_code}, response text: {response.text}")
     # Проверяем, что статус код 200 (успех)
+    error = ""
+    if response.status_code != 200:
+        error = parse_mexc_error(response.text)
 
-    return response.status_code == 200
+    return response.status_code == 200, error
 
 
 # Функция для получения клиента и валютной пары

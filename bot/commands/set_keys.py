@@ -54,9 +54,9 @@ async def get_api_secret(message: Message, state: FSMContext):
 
     # Проверка правильности API ключей
     try:
-        is_valid = await asyncio.to_thread(check_mexc_keys, api_key, api_secret)
+        is_valid, error_text = await asyncio.to_thread(check_mexc_keys, api_key, api_secret)
         if not is_valid:
-            await message.answer("❌ Неверные API ключи. Попробуйте снова с командой /set_keys")
+            await message.answer(f"❌ {error_text}\n\n Попробуйте снова с командой /set_keys")
             await state.clear()
             return
     except Exception as e:
