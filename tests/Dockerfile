@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     postgresql-client \
     curl \
     gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
@@ -20,7 +20,8 @@ COPY mexc-sdk-1.0.0 /app/mexc-sdk-1.0.0
 
 # Устанавливаем зависимости
 RUN pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir -e /app/mexc-sdk-1.0.0
+    pip install --no-cache-dir -e /app/mexc-sdk-1.0.0 && \
+    pip install --no-cache-dir pytest-asyncio pytest-django
 
 # Создаем непривилегированного пользователя
 RUN useradd -m appuser
@@ -35,8 +36,10 @@ COPY --chown=appuser:appuser . .
 # Устанавливаем переменные окружения
 ENV PYTHONPATH=/app
 ENV DJANGO_SETTINGS_MODULE=core.settings
+ENV TESTING=1
 
 # Переключаемся на непривилегированного пользователя
 USER appuser
 
-EXPOSE 8000
+# Запускаем тесты
+CMD ["pytest", "tests/", "-v"] 

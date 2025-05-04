@@ -3,10 +3,11 @@ from aiogram.types import Message
 from typing import Callable, Dict, Any, Awaitable
 from mexc_sdk import Spot
 from users.models import User
-from commands.states import APIAuth
+from bot.commands.states import APIAuth
 from django.core.exceptions import ObjectDoesNotExist
 from aiogram.fsm.context import FSMContext
 from bot.logger import logger
+from bot.utils.performance import global_cache, measure_time
 
 ALLOWED_COMMANDS = ["/help", "/set_keys"]
 
@@ -41,24 +42,29 @@ class AuthMiddleware(BaseMiddleware):
             logger.info("User is in API key setup state, allowing command.")
             return await handler(event, data)
 
+        # Проверяем кэш
+        cached_data = global_cache.get(f"user_{telegram_id}")
+        if cached_data and cached_data.get('api_key') and cached_data.get('api_secret'):
+            return await handler(event, data)
+
         # Проверка авторизации
         try:
             user = await User.objects.aget(telegram_id=telegram_id)
+            if user.api_key and user.api_secret:
+                # Сохраняем в кэш
+                global_cache.set(f"user_{telegram_id}", {
+                    'api_key': user.api_key,
+                    'api_secret': user.api_secret
+                })
+                return await handler(event, data)
         except ObjectDoesNotExist:
             logger.warning(f"User {telegram_id} not found.")
             await message.answer("Вы не зарегистрированы. Используйте /set_keys для авторизации.")
             return
-
-        try:
-            if not user.api_key or not user.api_secret:
-                logger.warning(f"User {telegram_id} has no API keys.")
-                await message.answer("Пожалуйста, сначала введите API ключи через /set_keys.")
-                return
-
         except Exception as e:
             logger.error(f"Ошибка при проверке API ключей: {e}")
             await message.answer("Неверные API ключи. Пожалуйста, повторите ввод через /set_keys.")
             return
 
-        # Всё хорошо — пускаем
-        return await handler(event, data)
+        await message.answer("Пожалуйста, сначала введите API ключи через /set_keys.")
+        return None

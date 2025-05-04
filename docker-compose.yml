@@ -1,6 +1,8 @@
+version: '3.8'
+
 services:
-  scalpingdb:
-    image: postgres:latest
+  db:
+    image: postgres:15
     container_name: scalpingdb
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -9,43 +11,115 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
-      - scalping_network
+      scalping_network:
+        aliases:
+          - db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
-  scalpingweb:
+  redis:
+    image: redis:7-alpine
+    container_name: scalpingredis
+    volumes:
+      - redis_data:/data
+    networks:
+      scalping_network:
+        aliases:
+          - redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  web:
     build: .
     container_name: scalpingweb
-    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+    command: ["./scripts/wait-for-db.sh", "db", "python", "manage.py", "runserver", "0.0.0.0:8000"]
     volumes:
       - .:/app
+      - ./logs:/app/logs:rw
+      - ./mexc-sdk-1.0.0:/app/mexc-sdk-1.0.0
     ports:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
-      - scalpingdb
+      - db
+      - redis
     networks:
-      - scalping_network
+      scalping_network:
+        aliases:
+          - web
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     restart: unless-stopped
 
-  scalpingbot:
+  bot:
     build: .
     container_name: scalpingbot
-    command: ["python", "bot/tg_bot.py"]
+    command: ["./scripts/wait-for-db.sh", "db", "python", "bot/tg_bot.py"]
     volumes:
       - .:/app
+      - ./logs:/app/logs:rw
+      - ./mexc-sdk-1.0.0:/app/mexc-sdk-1.0.0
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
-      - scalpingdb
+      - db
+      - redis
     networks:
-      - scalping_network
+      scalping_network:
+        aliases:
+          - bot
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     restart: unless-stopped
 
+  tests:
+    build:
+      context: .
+      dockerfile: tests/Dockerfile
+    volumes:
+      - .:/app
+      - ./logs:/app/logs:rw
+      - ./mexc-sdk-1.0.0:/app/mexc-sdk-1.0.0
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - REDIS_URL=redis://redis:6379/0
+      - TESTING=1
+    depends_on:
+      - db
+      - redis
+    networks:
+      scalping_network:
+        aliases:
+          - tests
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
 
 networks:
   scalping_network:
     driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
 
 volumes:
   postgres_data:
+  redis_data:

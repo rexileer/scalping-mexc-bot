@@ -7,10 +7,10 @@ from bot.commands.autobuy import autobuy_loop
 from bot.utils.mexc import get_user_client
 from bot.utils.user_autobuy_tasks import user_autobuy_tasks
 from users.models import User, Deal
-from logger import logger
+from bot.logger import logger
 from bot.keyboards.inline import get_period_keyboard
 from asgiref.sync import sync_to_async
-from mexc_sdk import Trade  # Предполагаем, что именно этот класс отвечает за торговые операции
+from mexc_sdk import Trade
 from django.utils.timezone import localtime
 from bot.utils.mexc import handle_mexc_response, get_actual_order_status
 from bot.utils.api_errors import parse_mexc_error
@@ -28,17 +28,15 @@ async def get_user_price(message: Message):
         if not pair:
             raise ValueError("Валютная пара не указана.")
 
-        # Получаем цену с помощью метода ticker_price (проверим корректность)
+        # Получаем цену с помощью метода ticker_price
         ticker = client.ticker_price(pair)
         
         # Отправляем цену пользователю
         await message.answer(f"Цена {pair}: {ticker['price']}")
     
     except ValueError as e:
-        # Обрабатываем ошибки, если ошибка в API или данных
         await message.answer(f"Ошибка: {e}")
     except Exception as e:
-        # Логируем и отправляем пользователю общую ошибку
         logger.error(f"Произошла ошибка при получении цены: {e}")
         await message.answer("Произошла ошибка при получении цены.")
 
@@ -61,17 +59,14 @@ async def balance_handler(message: Message):
 
         for balance in account_info['balances']:
             asset = balance['asset']
-            if asset not in relevant_assets:
-                continue
-
-            free = float(balance['free'])
-            locked = float(balance['locked'])
-
-            balances_message += (
-                f"\n<b>{asset}</b>\n"
-                f"Доступно: {format(free, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}\n"
-                f"Заморожено: {format(locked, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
-            )
+            if asset in relevant_assets:
+                free = float(balance['free'])
+                locked = float(balance['locked'])
+                balances_message += (
+                    f"\n<b>{asset}</b>\n"
+                    f"Доступно: {format(free, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}\n"
+                    f"Заморожено: {format(locked, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
+                )
 
         orders = client.open_orders(symbol=pair)
         logger.info(f"Open Orders for {message.from_user.id}: {orders}")
@@ -82,7 +77,7 @@ async def balance_handler(message: Message):
 
         orders_message = (
             f"\n\n📄 <b>Ордера</b>\n"
-            f"Количество: {format(total_order_amount, ',.0f').replace(',', ' ')}\n"
+            f"Количество: {format(total_order_amount, ',.0f').replace(',', ' ')}\n"
             f"Сумма исполнения: {format(total_order_value, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.')} {quote_asset}\n"
             f"Средняя цена исполнения: {format(avg_price, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.')} {quote_asset}"
         )
@@ -248,11 +243,11 @@ async def status_handler(message: Message):
         if active_deals:
             for deal in reversed(active_deals):  # От старых к новым
                 try:
-                    real_status = await sync_to_async(get_actual_order_status)(
+                    real_status = await get_actual_order_status(
                         user, deal.symbol, deal.order_id
                     )
                     deal.status = real_status
-                    deal.save()
+                    await sync_to_async(deal.save)()
 
                     if real_status not in ["NEW", "PARTIALLY_FILLED"]:
                         continue
