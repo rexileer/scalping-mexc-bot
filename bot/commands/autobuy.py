@@ -51,8 +51,17 @@ async def autobuy_loop(message: Message, telegram_id: int):
 
                     # Проверка условий для покупки
                     price_dropped = last_buy_price and ((last_buy_price - current_price) / last_buy_price * 100) >= loss_threshold
-                                    
-                    if not last_buy_price or price_dropped:
+                    price_rose = last_buy_price and ((current_price - last_buy_price) / last_buy_price * 100) >= profit_percent
+
+                    if not last_buy_price or price_dropped or price_rose:
+                        if price_rose:
+                            rise_percent = (current_price - last_buy_price) / last_buy_price * 100
+                            await message.answer(
+                                f"⚠️ *Обнаружен рост цены*\n\n"
+                                f"🟢 Цена выросла на `{rise_percent:.2f}%` от покупки по `{last_buy_price:.6f}` {symbol[3:]}\n",
+                                parse_mode="Markdown"
+                            )
+                            await asyncio.sleep(user.pause)  # Пауза перед покупкой на росте
                         if price_dropped:
                             drop_percent = (last_buy_price - current_price) / last_buy_price * 100
                             await message.answer(
