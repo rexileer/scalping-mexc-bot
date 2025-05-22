@@ -8,7 +8,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from aiogram.fsm.context import FSMContext
 from bot.logger import logger
 
-ALLOWED_COMMANDS = ["/help", "/set_keys"]
+ALLOWED_COMMANDS = ["/set_keys"]
 
 
 class AuthMiddleware(BaseMiddleware):

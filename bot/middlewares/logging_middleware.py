@@ -1,7 +1,12 @@
 from typing import Dict, Any, Callable, Awaitable
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery
-from bot.utils.bot_logging import log_user_action
+from bot.utils.bot_logging import log_command, log_user_action, log_callback
+from bot.logger import logger
+import re
+
+# Паттерн для определения команд: "/" + 1 или более букв/цифр/подчеркиваний
+COMMAND_PATTERN = re.compile(r'^/[a-zA-Z0-9_]+')
 
 class LoggingMiddleware(BaseMiddleware):
     """
@@ -13,13 +18,58 @@ class LoggingMiddleware(BaseMiddleware):
         event: Message | CallbackQuery,
         data: Dict[str, Any]
     ) -> Any:
+        # Логируем взаимодействие до вызова обработчика
+        if isinstance(event, Message):
+            # Обработка текстовых сообщений
+            user_id = event.from_user.id
+            username = event.from_user.username or event.from_user.first_name or 'Unknown'
+            
+            if event.text:
+                # Для команд просто логируем в консоль, детальное логирование будет в обработчиках
+                if COMMAND_PATTERN.match(event.text):
+                    command = event.text.split()[0]
+                    logger.info(f"User {user_id} sent command: {command}")
+                else:
+                    # Логируем обычное текстовое сообщение
+                    text = event.text[:100] + ('...' if len(event.text) > 100 else '')
+                    await log_user_action(
+                        user_id=user_id,
+                        action=f"Отправил сообщение",
+                        extra_data={
+                            'username': username,
+                            'text': text,
+                            'chat_id': event.chat.id,
+                            'message_type': 'text'
+                        }
+                    )
+            elif event.content_type != 'text':
+                # Логируем медиа-контент (фото, видео и т.д.)
+                await log_user_action(
+                    user_id=user_id,
+                    action=f"Отправил {event.content_type}",
+                    extra_data={
+                        'username': username,
+                        'chat_id': event.chat.id,
+                        'message_type': event.content_type
+                    }
+                )
+        
+        elif isinstance(event, CallbackQuery):
+            # Обработка нажатий на кнопки
+            user_id = event.from_user.id
+            username = event.from_user.username or event.from_user.first_name or 'Unknown'
+            callback_data = event.data
+            
+            # Используем специальную функцию для логирования callback-запросов
+            await log_callback(
+                user_id=user_id,
+                callback_data=callback_data,
+                extra_data={
+                    'username': username,
+                    'chat_id': event.message.chat.id if event.message else None,
+                    'message_id': event.message.message_id if event.message else None,
+                }
+            )
+        
         # Вызываем обработчик события
-        result = await handler(event, data)
-        
-        # Логируем только если обработчик не выполнил собственное логирование
-        # Мы не будем логировать здесь, основные команды будут логироваться
-        # в их собственных обработчиках
-        
-        # Для фоновых или необработанных событий можно добавить логирование здесь
-        
-        return result 
+        return await handler(event, data) 

@@ -195,4 +195,63 @@ async def log_command(
             }
         )
     except Exception as e:
-        logger.error(f"Error logging bot command: {e}") 
+        logger.error(f"Error logging bot command: {e}")
+
+async def log_callback(
+    user_id: Union[int, str],
+    callback_data: str,
+    response: Optional[str] = None,
+    success: bool = True,
+    extra_data: Optional[Dict[str, Any]] = None
+) -> None:
+    """
+    Функция для логирования callback-запросов (нажатий на кнопки).
+    
+    :param user_id: ID пользователя в Telegram
+    :param callback_data: Данные callback-запроса
+    :param response: Ответ бота
+    :param success: Успешно ли обработан callback
+    :param extra_data: Дополнительные данные
+    """
+    try:
+        # Форматируем сообщение
+        callback_preview = callback_data
+        if len(callback_data) > 50:
+            callback_preview = callback_data[:47] + "..."
+        
+        action = f"Нажал кнопку: {callback_preview}"
+        level = 'INFO' if success else 'ERROR'
+        
+        # Стандартное логирование в консоль
+        log_message = f"User {user_id}: {action}"
+        if level.upper() == 'ERROR':
+            logger.error(log_message)
+        else:
+            logger.info(log_message)
+        
+        # Подготовка дополнительных данных
+        callback_info = extra_data or {}
+        callback_info['callback_data'] = callback_data
+        
+        # Добавляем ответ, если он есть
+        if response:
+            callback_info['response'] = response
+                
+        # Добавляем статус выполнения
+        callback_info['success'] = success
+        
+        # Находим пользователя
+        user = await find_user_by_telegram_id(user_id)
+        
+        # Логируем в БД единой записью
+        await log_to_db(
+            message=action,
+            level=level,
+            user=user,
+            extra_data={
+                'user_id': user_id,
+                **callback_info
+            }
+        )
+    except Exception as e:
+        logger.error(f"Error logging callback: {e}") 
