@@ -7,6 +7,7 @@ from bot.commands.subscription import router as subscription_router  # Кома�
 from bot.commands.parameters import router as parameters_router  # Команда /parameters
 from bot.commands.trading import router as trading_router # Команды /price, /buy, /auto_buy, /balance, /status, /stats
 from bot.commands.stats import router as stats_router  # stats
+from bot.commands.example_command import router as example_router  # Пример команды с логированием
 
 def setup_routers() -> Router:
     router = Router()
@@ -18,4 +19,5 @@ def setup_routers() -> Router:
     
     router.include_router(trading_router)
     router.include_router(stats_router)
+    router.include_router(example_router)  # Добавляем пример команды
     return router

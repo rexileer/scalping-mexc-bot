@@ -16,10 +16,11 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from bot.daily_stats import start_scheduler
 from bot.config import load_config
-from bot.logger import logger
+from bot.logger import logger, log_to_db
 from bot.routers import setup_routers
 from bot.middlewares.access_middleware import AccessMiddleware
 from bot.middlewares.auth_middleware import AuthMiddleware
+from bot.middlewares.logging_middleware import LoggingMiddleware
 from bot.utils.set_commands import set_default_commands
 
 config = load_config()
@@ -37,10 +38,22 @@ async def main():
         dp.message.middleware(AccessMiddleware())
         dp.message.middleware(AuthMiddleware())
         
+        # Добавляем middleware для логирования всех сообщений и команд
+        dp.message.middleware(LoggingMiddleware())
+        dp.callback_query.middleware(LoggingMiddleware())
+        
         start_scheduler(bot)
         
         await set_default_commands(bot)
         logger.info("Bot started")
+        
+        # Добавляем запись в БД о запуске бота
+        await log_to_db("Бот запущен", level='INFO', extra_data={
+            'type': 'bot_start',
+            'version': '1.0',
+            'environment': os.environ.get('DJANGO_SETTINGS_MODULE', 'unknown')
+        })
+        
         await asyncio.gather(
             bot.delete_webhook(drop_pending_updates=True),
             dp.start_polling(bot, skip_updates=False),
@@ -48,8 +61,17 @@ async def main():
 
     except Exception as e:
         logger.error(f"Error: {e}")
+        # Логируем ошибку в БД
+        await log_to_db(f"Ошибка при запуске бота: {e}", level='ERROR', extra_data={
+            'type': 'bot_error',
+            'traceback': str(e),
+        })
     finally:
         if 'bot' in locals():
+            # Логируем остановку бота
+            await log_to_db("Бот остановлен", level='INFO', extra_data={
+                'type': 'bot_stop',
+            })
             await bot.close()
 
 
