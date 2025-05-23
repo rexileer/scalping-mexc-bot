@@ -23,6 +23,8 @@ from bot.middlewares.access_middleware import AccessMiddleware
 from bot.middlewares.auth_middleware import AuthMiddleware
 from bot.middlewares.logging_middleware import LoggingMiddleware
 from bot.utils.set_commands import set_default_commands
+from bot.utils.log_cleaner import start_log_cleaner
+from django.conf import settings
 
 config = load_config()
 
@@ -49,6 +51,10 @@ async def main():
         
         # Запускаем планировщик задач
         start_scheduler(bot)
+        
+        # Запускаем очистку логов каждые 30 минут
+        retention_days = getattr(settings, 'LOG_RETENTION_DAYS', 7)
+        log_cleaner_task = await start_log_cleaner(retention_days=retention_days)
         
         # Устанавливаем команды бота
         await set_default_commands(bot)
