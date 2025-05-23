@@ -6,6 +6,7 @@ from .states import ParameterChange
 from users.models import User
 from bot.logger import logger
 from bot.keyboards.inline import build_parameters_keyboard
+from bot.utils.bot_logging import log_command, log_callback
 
 router = Router()
 
@@ -13,22 +14,88 @@ router = Router()
 # Команда для отображения параметров
 @router.message(F.text == "/parameters")
 async def show_parameters(message: Message, state: FSMContext):
-    await state.clear()
-    user_params = await get_user_parameters(message.from_user.id)
-    if not user_params:
-        await message.answer("Пользователь не найден в базе данных.")
-        return
+    user_id = message.from_user.id
+    username = message.from_user.username or message.from_user.first_name or str(user_id)
+    command = "/parameters"
+    response_text = "Выберите параметр для изменения:"
+    success = True
+    extra_data = {"username": username, "chat_id": message.chat.id}
+    
+    try:
+        await state.clear()
+        user_params = await get_user_parameters(message.from_user.id)
+        
+        if not user_params:
+            response_text = "Пользователь не найден в базе данных."
+            success = False
+            await message.answer(response_text)
+            
+            # Логируем команду и ответ
+            await log_command(
+                user_id=user_id,
+                command=command,
+                response=response_text,
+                success=success,
+                extra_data=extra_data
+            )
+            return
 
-    keyboard = build_parameters_keyboard(user_params)
-    sent = await message.answer("Выберите параметр для изменения:", reply_markup=keyboard)
-    await state.update_data(menu_message_id=sent.message_id)
+        # Добавляем текущие параметры в extra_data
+        extra_data["profit"] = float(user_params.profit)
+        extra_data["loss"] = float(user_params.loss)
+        extra_data["pause"] = int(user_params.pause)
+        extra_data["buy_amount"] = float(user_params.buy_amount)
+        
+        keyboard = build_parameters_keyboard(user_params)
+        sent = await message.answer(response_text, reply_markup=keyboard)
+        await state.update_data(menu_message_id=sent.message_id)
+    except Exception as e:
+        logger.exception(f"Ошибка при отображении параметров для {user_id}")
+        response_text = f"Ошибка при получении параметров: {str(e)}"
+        success = False
+        await message.answer(response_text)
+    
+    # Логируем команду и ответ
+    await log_command(
+        user_id=user_id,
+        command=command,
+        response=response_text,
+        success=success,
+        extra_data=extra_data
+    )
 
 
 async def handle_param_change(callback_query: CallbackQuery, state: FSMContext, text: str, state_to_set):
-    await callback_query.message.edit_text(text)
-    await state.set_state(state_to_set)
-    await state.update_data(menu_message_id=callback_query.message.message_id)
-    await callback_query.answer()
+    user_id = callback_query.from_user.id
+    username = callback_query.from_user.username or callback_query.from_user.first_name or str(user_id)
+    callback_data = callback_query.data
+    response_text = text
+    success = True
+    extra_data = {
+        "username": username, 
+        "chat_id": callback_query.message.chat.id,
+        "parameter": callback_data.replace("change_", "")
+    }
+    
+    try:
+        await callback_query.message.edit_text(text)
+        await state.set_state(state_to_set)
+        await state.update_data(menu_message_id=callback_query.message.message_id)
+        await callback_query.answer()
+    except Exception as e:
+        logger.exception(f"Ошибка при обработке изменения параметра {callback_data} для {user_id}")
+        response_text = f"Ошибка при изменении параметра: {str(e)}"
+        success = False
+        await callback_query.answer("Произошла ошибка")
+    
+    # Логируем callback
+    await log_callback(
+        user_id=user_id,
+        callback_data=callback_data,
+        response=response_text,
+        success=success,
+        extra_data=extra_data
+    )
 
 
 @router.callback_query(F.data == "change_profit")
@@ -52,27 +119,62 @@ async def change_buy_amount(callback_query: CallbackQuery, state: FSMContext):
 
 
 async def finalize_parameter_change(message: Message, state: FSMContext, field: str, parser):
+    user_id = message.from_user.id
+    username = message.from_user.username or message.from_user.first_name or str(user_id)
+    command = f"set_{field}"
+    response_text = ""
+    success = True
+    extra_data = {
+        "username": username, 
+        "chat_id": message.chat.id,
+        "parameter": field,
+        "value_text": message.text
+    }
+    
     try:
         value = parser(message.text)
+        extra_data["value"] = value
+        
         await save_user_parameter(message.from_user.id, field, value)
         user_params = await get_user_parameters(message.from_user.id)
         keyboard = build_parameters_keyboard(user_params)
         data = await state.get_data()
         menu_message_id = data.get("menu_message_id")
 
+        # Формируем текст ответа
+        response_text = f"✅ Параметр `{field}` обновлён: `{value}`\n\nВыберите следующий параметр:"
+        
         # Редактируем старое сообщение бота с новой клавиатурой
         await message.bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=menu_message_id,
-            text=f"✅ Параметр `{field}` обновлён: `{value}`\n\nВыберите следующий параметр:",
+            text=response_text,
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
-    except ValueError:
-        await message.answer("❌ Некорректное значение. Попробуйте снова.")
+    except ValueError as e:
+        response_text = "❌ Некорректное значение. Попробуйте снова."
+        success = False
+        await message.answer(response_text)
+        extra_data["error"] = str(e)
+    except Exception as e:
+        logger.exception(f"Ошибка при сохранении параметра {field} для {user_id}")
+        response_text = f"Ошибка при сохранении параметра: {str(e)}"
+        success = False
+        await message.answer(response_text)
+        extra_data["error"] = str(e)
     finally:
         await message.delete()  # Удаляем сообщение пользователя
         await state.clear()
+    
+    # Логируем изменение параметра
+    await log_command(
+        user_id=user_id,
+        command=command,
+        response=response_text,
+        success=success,
+        extra_data=extra_data
+    )
 
 
 @router.message(ParameterChange.waiting_for_profit)

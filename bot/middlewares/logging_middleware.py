@@ -55,21 +55,13 @@ class LoggingMiddleware(BaseMiddleware):
                 )
         
         elif isinstance(event, CallbackQuery):
-            # Обработка нажатий на кнопки
+            # Обработка нажатий на кнопки - только логируем в консоль
+            # Полное логирование будет происходить в обработчиках callback
             user_id = event.from_user.id
-            username = event.from_user.username or event.from_user.first_name or 'Unknown'
             callback_data = event.data
             
-            # Используем специальную функцию для логирования callback-запросов
-            await log_callback(
-                user_id=user_id,
-                callback_data=callback_data,
-                extra_data={
-                    'username': username,
-                    'chat_id': event.message.chat.id if event.message else None,
-                    'message_id': event.message.message_id if event.message else None,
-                }
-            )
+            # Только логируем в консоль, без создания записи в БД
+            logger.info(f"User {user_id} pressed button: {callback_data}")
         
         # Вызываем обработчик события
         return await handler(event, data) 
