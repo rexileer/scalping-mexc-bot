@@ -7,7 +7,6 @@ from bot.commands.subscription import router as subscription_router  # Кома�
 from bot.commands.parameters import router as parameters_router  # Команда /parameters
 from bot.commands.trading import router as trading_router # Команды /price, /buy, /auto_buy, /balance, /status, /stats
 from bot.commands.stats import router as stats_router  # stats
-from bot.commands.fallback_handler import router as fallback_router  # Обработчик необработанных сообщений и команд
 
 def setup_routers() -> Router:
     router = Router()
@@ -19,9 +18,5 @@ def setup_routers() -> Router:
     
     router.include_router(trading_router)
     router.include_router(stats_router)
-    
-    # В самом конце подключаем fallback обработчик для всех остальных сообщений
-    # Он должен быть последним, чтобы не перехватывать сообщения других обработчиков
-    router.include_router(fallback_router)
     
     return router
