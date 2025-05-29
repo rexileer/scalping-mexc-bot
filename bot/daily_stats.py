@@ -20,7 +20,6 @@ DAILY_STATS_TIME = "00:00"  # Moscow time
 async def scheduler(bot: Bot):
     """Main scheduler function that runs multiple scheduled tasks"""
     logger.info("Starting scheduler")
-    await check_subscription_expiration(bot)
     while True:
         now = timezone.now()
         
@@ -63,8 +62,12 @@ async def scheduler(bot: Bot):
 
 @sync_to_async
 def get_all_users():
-    """Get all users from the database"""
-    return list(User.objects.all())
+    """Get all users from the database with active subscriptions"""
+    # Получаем только пользователей с активными подписками
+    now = timezone.now()
+    return list(User.objects.filter(
+        subscription__expires_at__gt=now
+    ).distinct())
 
 @sync_to_async
 def get_user_deals(user, start_date, end_date):
