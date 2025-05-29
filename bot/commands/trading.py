@@ -5,6 +5,7 @@ import asyncio
 from bot.commands.buy import monitor_order
 from bot.commands.autobuy import autobuy_loop
 from bot.utils.mexc import get_user_client
+from bot.utils.websocket_manager import websocket_manager
 from bot.utils.user_autobuy_tasks import user_autobuy_tasks
 from users.models import User, Deal
 from logger import logger
@@ -34,15 +35,35 @@ async def get_user_price(message: Message):
         # Проверяем, что валидная пара получена
         if not pair:
             raise ValueError("Валютная пара не указана.")
-
-        # Получаем цену с помощью метода ticker_price (проверим корректность)
+            
+        # Сначала получаем текущую цену с помощью REST API
         ticker = client.ticker_price(pair)
+        current_price = ticker['price']
         
-        # Формируем ответ пользователю
-        response_text = f"Цена {pair}: {ticker['price']}"
+        # Формируем начальный ответ
+        response_text = f"Цена {pair}: {current_price}"
+        sent_message = await message.answer(response_text)
         
-        # Отправляем цену пользователю
-        await message.answer(response_text)
+        # Создаём или подключаемся к WebSocket для рыночных данных
+        if not websocket_manager.market_connection:
+            await websocket_manager.connect_market_data([pair])
+        elif pair not in websocket_manager.market_subscriptions:
+            await websocket_manager.subscribe_market_data([pair])
+        
+        # Функция для обновления цены в сообщении
+        async def update_price_message(symbol, price):
+            nonlocal sent_message
+            await sent_message.edit_text(f"Цена {symbol}: {price} (обновлено)")
+        
+        # Регистрируем callback для обновления цены в реальном времени
+        await websocket_manager.register_price_callback(pair, update_price_message)
+        
+        # Через 10 секунд удалим callback (чтобы не накапливать их)
+        await asyncio.sleep(10)
+        
+        if pair in websocket_manager.price_callbacks:
+            if update_price_message in websocket_manager.price_callbacks[pair]:
+                websocket_manager.price_callbacks[pair].remove(update_price_message)
     
     except ValueError as e:
         # Обрабатываем ошибки, если ошибка в API или данных

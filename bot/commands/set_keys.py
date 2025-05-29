@@ -5,6 +5,7 @@ from asgiref.sync import sync_to_async
 from .states import APIAuth
 from users.models import User
 from utils.mexc import check_mexc_keys
+from bot.utils.websocket_manager import websocket_manager
 from editing.models import BotMessagesForKeys
 import asyncio
 from aiogram.types import FSInputFile
@@ -170,6 +171,11 @@ async def get_api_secret(message: Message, state: FSMContext):
         # Сохранение API ключей в базе данных
         try:
             await save_api_keys(message.from_user.id, api_key, api_secret)
+            
+            # Инициализируем WebSocket соединение для пользователя
+            websocket_init_task = asyncio.create_task(websocket_manager.connect_user_data_stream(message.from_user.id))
+            extra_data["websocket_init"] = True
+            
             response_text = "✅ Ключи успешно сохранены.\nДля запуска бота нажмите команду /start"
             await message.answer(response_text)
             extra_data["keys_saved"] = True

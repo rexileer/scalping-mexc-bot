@@ -24,6 +24,7 @@ from bot.middlewares.auth_middleware import AuthMiddleware
 from bot.middlewares.logging_middleware import LoggingMiddleware
 from bot.utils.set_commands import set_default_commands
 from bot.utils.log_cleaner import start_log_cleaner
+from bot.utils.websocket_manager import websocket_manager
 from django.conf import settings
 
 config = load_config()
@@ -58,6 +59,13 @@ async def main():
         
         # Устанавливаем команды бота
         await set_default_commands(bot)
+        
+        # Инициализируем WebSocket соединения для всех пользователей с ключами
+        logger.info("Initializing WebSocket connections for users...")
+        websocket_init_task = asyncio.create_task(websocket_manager.connect_valid_users())
+        
+        # Инициализируем общее WebSocket соединение для мониторинга цен
+        # Будем инициализировать его по требованию
         logger.info("Bot started successfully")
         
         # Добавляем запись в БД о запуске бота
@@ -93,6 +101,10 @@ async def main():
     finally:
         if 'bot' in locals():
             try:
+                # Закрываем все WebSocket соединения
+                logger.info("Closing all WebSocket connections...")
+                await websocket_manager.disconnect_all()
+                
                 # Логируем остановку бота
                 await log_to_db("Бот остановлен", level='INFO', extra_data={
                     'type': 'bot_stop',
