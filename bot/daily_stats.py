@@ -5,8 +5,13 @@ from django.utils import timezone
 import pytz
 from users.models import User, Deal
 from subscriptions.models import Subscription
+from editing.models import BotMessageForSubscription
 from bot.logger import logger
 from asgiref.sync import sync_to_async
+from bot.constants import DEFAULT_PAYMENT_MESSAGE
+from aiogram.types import FSInputFile
+from django.db.utils import OperationalError
+from bot.utils.bot_logging import log_callback
 
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 DAILY_STATS_TIME = "00:00"  # Moscow time
@@ -141,37 +146,82 @@ async def check_subscription_expiration(bot: Bot):
     tomorrow = timezone.now() + timedelta(days=1)
     hours_36_later = timezone.now() + timedelta(hours=36)
     
-    # Получаем пользователей, чьи подписки заканчиваются завтра
+    # Получаем пользователей, чьи подписки заканчиваются завтра
     expiring_subscriptions = await sync_to_async(list)(
         Subscription.objects.filter(
             expires_at__lte=hours_36_later
         ).select_related('user')
     )
     
+    # Пытаемся получить кастомное сообщение из базы
+    try:
+        bot_message = await BotMessageForSubscription.objects.afirst()
+    except OperationalError:
+        # База ещё не готова, или миграции не применены
+        bot_message = None
+    except Exception as e:
+        logger.error(f"Error while fetching subscription message: {e}")
+        bot_message = None
+    
     for subscription in expiring_subscriptions:
         user = subscription.user
         hours_remaining = max(int((subscription.expires_at - timezone.now()).total_seconds() / 3600), 0)
         
-        # Пропускаем пользователей, чьи подписки заканчиваются в ближайшее время
+        # Пропускаем пользователей, чьи подписки заканчиваются в ближайшее время
         if hours_remaining > 36 or hours_remaining < 1:
             continue
-            
-        warning_message = (
-            f"❗ *Подписка на бота закончится через {hours_remaining} часов* ❗\n\n"
-            f"*Для продления доступа на 30 дней*\n\n"
-            f"*1)* Оплатите *100 USDT* в сети *TRC20 (tron)* на кошелек\n"
-            f"`TCh1xdkncgoSELQwa35EC6hTAcwnu3E5XP` (нажмите для копирования).\n"
-            f"_При оплате учитывайте комиссию._\n\n"
-            f"*2)* Пришлите скрин оплаты с хэшем (TXID) из истории транзакций Вашего кошелька в ЛС @ScalpingBotSupport.\n\n"
-            f"_Обратите внимание!_\n"
-            f"В случае неоплаты доступ к боту будет автоматически закрыт и все Ваши данные будут удалены. При этом открытые ордера на бирже останутся."
-        )
+        
+        # Формируем сообщение о предупреждении
+        warning_header = f"❗ <b>Подписка на бота закончится через {hours_remaining} часов</b> ❗\n\n"
+        
+        # Используем сообщение из БД или дефолтное
+        if bot_message:
+            payment_message = bot_message.text
+            has_image = bot_message.image is not None
+        else:
+            payment_message = DEFAULT_PAYMENT_MESSAGE
+            has_image = False
+        
+        # Логирование
+        extra_data = {
+            "user_telegram_id": user.telegram_id,
+            "hours_remaining": hours_remaining,
+            "has_custom_message": bot_message is not None,
+            "has_image": has_image
+        }
         
         try:
-            await bot.send_message(user.telegram_id, warning_message, parse_mode="Markdown")
+            # Если есть изображение, отправляем его вместе с текстом
+            if has_image:
+                file = FSInputFile(bot_message.image.path)
+                await bot.send_photo(user.telegram_id, file, caption=warning_header + payment_message, parse_mode="HTML")
+            else:
+                # Иначе отправляем только текст
+                await bot.send_message(user.telegram_id, warning_header + payment_message, parse_mode="HTML")
+            
             logger.info(f"Subscription expiration warning sent to {user.telegram_id}, {hours_remaining} hours remaining")
+            
+            # Логируем событие в базу данных
+            await log_callback(
+                user_id=user.telegram_id,
+                callback_data="subscription_expiration_warning",
+                response=warning_header + payment_message,
+                success=True,
+                extra_data=extra_data
+            )
         except Exception as e:
             logger.error(f"Failed to send subscription warning to user {user.telegram_id}: {e}")
+            extra_data["error"] = str(e)
+            extra_data["success"] = False
+            
+            # Логируем ошибку в базу данных
+            await log_callback(
+                user_id=user.telegram_id,
+                callback_data="subscription_expiration_warning",
+                response="Failed to send subscription warning",
+                success=False,
+                extra_data=extra_data
+            )
 
 def start_scheduler(bot: Bot):
     """Start the scheduler as a background task"""
