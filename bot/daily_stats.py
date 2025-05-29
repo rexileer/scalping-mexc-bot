@@ -3,6 +3,7 @@ from aiogram import Bot
 from datetime import timedelta
 from django.utils import timezone
 import pytz
+import os
 from users.models import User, Deal
 from subscriptions.models import Subscription
 from editing.models import BotMessageForSubscription
@@ -19,7 +20,7 @@ DAILY_STATS_TIME = "00:00"  # Moscow time
 async def scheduler(bot: Bot):
     """Main scheduler function that runs multiple scheduled tasks"""
     logger.info("Starting scheduler")
-    
+    await check_subscription_expiration(bot)
     while True:
         now = timezone.now()
         
@@ -177,7 +178,10 @@ async def check_subscription_expiration(bot: Bot):
         # Используем сообщение из БД или дефолтное
         if bot_message:
             payment_message = bot_message.text
-            has_image = bot_message.image is not None
+            # Проверяем, есть ли изображение и существует ли файл
+            has_image = bot_message.image and hasattr(bot_message.image, 'path') and os.path.exists(bot_message.image.path)
+            if bot_message.image and not has_image:
+                logger.warning(f"Image for subscription message exists in DB but file is missing or invalid")
         else:
             payment_message = DEFAULT_PAYMENT_MESSAGE
             has_image = False
