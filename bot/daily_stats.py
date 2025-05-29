@@ -17,11 +17,22 @@ from bot.utils.bot_logging import log_callback
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 DAILY_STATS_TIME = "00:00"  # Moscow time
 
+# Переменные для отслеживания последних запусков
+last_sub_check_time = 0
+last_stats_time = 0
+MIN_INTERVAL_SECONDS = 60  # Минимальный интервал между запусками одной и той же задачи
+
 async def scheduler(bot: Bot):
     """Main scheduler function that runs multiple scheduled tasks"""
+    global last_sub_check_time, last_stats_time
+    
     logger.info("Starting scheduler")
+    await check_subscription_expiration(bot)
+    last_sub_check_time = timezone.now().timestamp()
+    
     while True:
         now = timezone.now()
+        now_timestamp = now.timestamp()
         
         # Вычисляем время следующего запуска
         moscow_now = now.astimezone(MOSCOW_TZ)
@@ -46,19 +57,37 @@ async def scheduler(bot: Bot):
         next_run_time = min(next_stats_run_utc, next_sub_check)
         wait_seconds = max((next_run_time - now).total_seconds(), 0)
         
+        # Минимальный интервал ожидания для предотвращения слишком частых запусков
+        if wait_seconds < MIN_INTERVAL_SECONDS:
+            wait_seconds = MIN_INTERVAL_SECONDS
+            logger.info(f"Wait time too short, setting to minimum interval: {MIN_INTERVAL_SECONDS} seconds")
+        
         task_name = "daily stats" if next_run_time == next_stats_run_utc else "subscription checks"
         logger.info(f"Next scheduled task: {task_name} in {wait_seconds:.2f} seconds")
         
         # Ждем до следующего запуска
         await asyncio.sleep(wait_seconds)
         
+        # Текущее время после ожидания
+        current_time = timezone.now().timestamp()
+        
         # Запускаем задачу
         if next_run_time == next_stats_run_utc:
-            logger.info("Running daily statistics task")
-            await process_and_send_stats(bot)
+            # Проверяем, прошло ли достаточно времени с последнего запуска
+            if current_time - last_stats_time >= MIN_INTERVAL_SECONDS:
+                logger.info("Running daily statistics task")
+                await process_and_send_stats(bot)
+                last_stats_time = current_time
+            else:
+                logger.info(f"Skipping daily stats task - last run was {current_time - last_stats_time:.2f} seconds ago")
         else:
-            logger.info("Running subscription expiration checks")
-            await check_subscription_expiration(bot)
+            # Проверяем, прошло ли достаточно времени с последнего запуска
+            if current_time - last_sub_check_time >= MIN_INTERVAL_SECONDS:
+                logger.info("Running subscription expiration checks")
+                await check_subscription_expiration(bot)
+                last_sub_check_time = current_time
+            else:
+                logger.info(f"Skipping subscription check - last run was {current_time - last_sub_check_time:.2f} seconds ago")
 
 @sync_to_async
 def get_all_users():
