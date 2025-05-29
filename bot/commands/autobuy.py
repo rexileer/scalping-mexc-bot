@@ -130,7 +130,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         await message.answer(
                             f"🟢 *СДЕЛКА {user_order_number} ОТКРЫТА*\n\n"
                             f"📉 Куплено по: `{real_price:.6f}` {symbol[3:]}\n"
-                            f"📦 Кол-во: `{executed_qty:.4f}` {symbol[:3]}\n"
+                            f"📦 Кол-во: `{executed_qty:.6f}` {symbol[:3]}\n"
                             f"💸 Потрачено: `{spent:.2f}` {symbol[3:]}\n\n"
                             f"📈 Лимит на продажу: `{sell_price:.6f}` {symbol[3:]}",
                             parse_mode="Markdown"
@@ -246,7 +246,7 @@ async def monitor_order_autobuy(
 
                 await message.answer(
                     f"❌ *СДЕЛКА {user_order_number} ОТМЕНЕНА*\n\n"
-                    f"📦 Кол-во: `{deal.quantity:.4f}` {deal.symbol[:3]}\n"
+                    f"📦 Кол-во: `{deal.quantity:.6f}` {deal.symbol[:3]}\n"
                     f"💰 Куплено по: `{deal.buy_price:.6f}` {deal.symbol[3:]}\n"
                     f"📈 Продажа: `{deal.quantity:.4f}` {deal.symbol[:3]} по {deal.sell_price:.6f} {deal.symbol[3:]}\n",
                     parse_mode="Markdown"
@@ -266,7 +266,7 @@ async def monitor_order_autobuy(
 
                 await message.answer(
                     f"✅ *СДЕЛКА {user_order_number} ЗАВЕРШЕНА*\n\n"
-                    f"📦 Кол-во: `{quantity:.4f}` {symbol[:3]}\n"
+                    f"📦 Кол-во: `{quantity:.6f}` {symbol[:3]}\n"
                     f"💰 Продано по: `{sell_price:.6f}` {symbol[3:]}\n"
                     f"📊 Прибыль: `{profit:.2f}` {symbol[3:]}",
                     parse_mode="Markdown"

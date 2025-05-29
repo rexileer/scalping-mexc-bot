@@ -240,7 +240,7 @@ async def buy_handler(message: Message):
         response_text = (
             f"🟢 *СДЕЛКА {user_order_number} ОТКРЫТА*\n\n"
             f"📉 Куплено по: `{real_price:.6f}` {symbol[3:]}\n"
-            f"📦 Кол-во: `{executed_qty:.4f}` {symbol[:3]}\n"
+            f"📦 Кол-во: `{executed_qty:.6f}` {symbol[:3]}\n"
             f"💸 Потрачено: `{spent:.2f}` {symbol[3:]}\n\n"
             f"📈 Лимит на продажу: `{sell_price:.6f}` {symbol[3:]}"
         )
@@ -403,7 +403,7 @@ async def status_handler(message: Message):
 
                     formatted = (
                         f"\n\n<u>{deal.user_order_number}. Ордер на продажу{autobuy_note}</u>\n\n"
-                        f"<b>{deal.quantity:.2f} {symbol[:3]}</b>\n"
+                        f"<b>{deal.quantity:.6f} {symbol[:3]}</b>\n"
                         f"- Куплено по <b>{deal.buy_price:.6f}</b> (<b>{deal.buy_price * deal.quantity:.2f}</b> {symbol[3:]})\n"
                         f"- Продается по <b>{deal.sell_price:.6f}</b> (<b>{deal.sell_price * deal.quantity:.2f}</b> {symbol[3:]})\n\n"
                         f"<i>{date_str}</i>"

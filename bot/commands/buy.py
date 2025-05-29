@@ -38,8 +38,8 @@ async def monitor_order(message: Message, order_id: str, user_order_number: int)
                 await sync_to_async(deal.save)()
                 await message.answer(
                     f"❌ <b>СДЕЛКА {user_order_number} ОТМЕНЕНА</b>\n\n"
-                    f"🔁 Покупка: {deal.quantity:.2f} {deal.symbol[:3]} по {deal.buy_price:.6f} {deal.symbol[3:]}\n"
-                    f"📈 Продажа: {deal.quantity:.2f} {deal.symbol[:3]} по {deal.sell_price:.6f} {deal.symbol[3:]}\n",
+                    f"🔁 Покупка: {deal.quantity:.6f} {deal.symbol[:3]} по {deal.buy_price:.6f} {deal.symbol[3:]}\n"
+                    f"📈 Продажа: {deal.quantity:.6f} {deal.symbol[:3]} по {deal.sell_price:.6f} {deal.symbol[3:]}\n",
                     parse_mode='HTML'
                 )
                 return
@@ -58,7 +58,7 @@ async def monitor_order(message: Message, order_id: str, user_order_number: int)
 
                 text = (
                     f"✅ *СДЕЛКА {user_order_number} ЗАВЕРШЕНА*\n\n"
-                    f"📦 Кол-во: `{deal.quantity:.4f}` {base}\n"
+                    f"📦 Кол-во: `{deal.quantity:.6f}` {base}\n"
                     f"💰 Продано по: `{deal.sell_price:.6f}` {quote}\n"
                     f"📊 Прибыль: `{profit:.2f}` {quote}"
                 )
