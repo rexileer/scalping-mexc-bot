@@ -9,7 +9,7 @@ import hashlib
 
 from users.models import User
 from logger import logger
-from bot.utils.websocket_handlers import handle_order_update, handle_account_update, handle_price_update
+from bot.utils.websocket_handlers import handle_order_update, handle_account_update, handle_price_update, update_order_status
 
 
 class MexcWebSocketManager:
@@ -187,7 +187,10 @@ class MexcWebSocketManager:
             # Start listening for messages
             asyncio.create_task(self._listen_user_messages(user_id))
             
-            logger.info(f"Connected user {user_id} to WebSocket")
+            # После успешного подключения подписываемся на ордера
+            await self.subscribe_user_orders(user_id)
+            
+            logger.info(f"Connected user {user_id} to WebSocket and subscribed to orders")
             return True
         except Exception as e:
             logger.error(f"Error connecting user {user_id} to WebSocket: {e}")
@@ -207,31 +210,61 @@ class MexcWebSocketManager:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     data = json.loads(msg.data)
                     
-                    # Check for PONG response
-                    if 'pong' in data:
-                        # This is a pong response
+                    # Проверка сервисных сообщений
+                    if 'id' in data and 'code' in data:
+                        # Понижаем уровень логирования
+                        logger.debug(f"Сервисное сообщение для {user_id}: {data}")
                         continue
                     
-                    # Check for PING response
+                    # Проверка PING/PONG
+                    if 'pong' in data:
+                        logger.debug(f"Received PONG from server for user {user_id}")
+                        continue
+                    
                     if 'ping' in data:
-                        # Ответить PONG на тот же WebSocket
                         pong_msg = {'pong': data['ping']}
                         await ws.send_str(json.dumps(pong_msg))
-                        logger.debug(f"Отправлен PONG в ответ на PING от сервера")
+                        logger.debug(f"Sent PONG in response to server PING for user {user_id}")
                         continue
                     
-                    # Process user-specific messages
-                    event_type = data.get('e')
+                    # Обработка событий с данными
+                    channel = data.get('c')
                     
-                    if event_type == 'executionReport':
-                        # Order update
-                        await handle_order_update(user_id, data)
-                    elif event_type == 'outboundAccountPosition':
-                        # Account update
-                        await handle_account_update(user_id, data)
+                    if channel == "spot@private.orders.v3.api":
+                        # Обрабатываем обновления ордера
+                        order_data = data.get('d', {})
+                        symbol = data.get('s')
+                        order_id = order_data.get('i')
+                        status_code = order_data.get('s')
+                        
+                        # Карта статусов MEXC -> наша БД
+                        status_map = {
+                            1: "NEW",           # 1 - новый
+                            2: "FILLED",        # 2 - исполнен
+                            3: "PARTIALLY_FILLED", # 3 - частично исполнен
+                            4: "CANCELED",      # 4 - отменен
+                            5: "REJECTED"       # 5 - отклонен
+                        }
+                        status = status_map.get(status_code, "UNKNOWN")
+                        
+                        logger.info(f"Обновление ордера {order_id} для пользователя {user_id}: {symbol} - {status}")
+                        
+                        # Обновляем статус в БД
+                        try:
+                            await update_order_status(order_id, symbol, status)
+                        except Exception as e:
+                            logger.error(f"Ошибка обновления статуса ордера: {e}")
+                        
+                    elif channel == "spot@private.account.v3.api":
+                        # Обрабатываем изменения в аккаунте
+                        account_data = data.get('d', {})
+                        asset = account_data.get('a')  # Актив (валюта)
+                        free = account_data.get('f')   # Доступный баланс
+                        locked = account_data.get('l') # Заблокированный баланс
+                        
+                        logger.info(f"Обновление баланса для {user_id}: {asset} - свободно: {free}, заблокировано: {locked}")
                     else:
-                        # Unknown event type
-                        logger.debug(f"User {user_id} received unknown event: {event_type}")
+                        logger.debug(f"Неизвестный канал для {user_id}: {channel}, данные: {json.dumps(data)}")
                 
                 elif msg.type == aiohttp.WSMsgType.CLOSED:
                     logger.warning(f"WebSocket for user {user_id} closed")
@@ -464,6 +497,46 @@ class MexcWebSocketManager:
         # Connect each user
         for user in users:
             await self.connect_user_data_stream(user.telegram_id)
+
+    async def subscribe_user_orders(self, user_id: int, symbol: str = None):
+        """
+        Подписка на обновления ордеров пользователя.
+        """
+        if user_id not in self.user_connections:
+            logger.warning(f"Невозможно подписаться: нет соединения для пользователя {user_id}")
+            return False
+        
+        try:
+            ws = self.user_connections[user_id]['ws']
+            
+            # Для пользовательских данных через listenKey
+            # не нужно указывать конкретный символ - сервер сам
+            # будет отправлять все обновления ордеров пользователя
+            params = [
+                "spot@private.orders.v3.api",     # все ордера пользователя
+                "spot@private.account.v3.api"     # данные аккаунта
+            ]
+            
+            # Отправляем запрос на подписку
+            subscription_msg = {
+                "method": "SUBSCRIPTION",
+                "params": params,
+                "id": int(time.time() * 1000)  # уникальный ID для запроса
+            }
+            
+            await ws.send_str(json.dumps(subscription_msg))
+            logger.info(f"Отправлен запрос на подписку для пользователя {user_id}: {params}")
+            
+            # Сохраняем информацию о подписке
+            if 'subscriptions' not in self.user_connections[user_id]:
+                self.user_connections[user_id]['subscriptions'] = []
+            
+            self.user_connections[user_id]['subscriptions'].extend(params)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Ошибка при подписке на обновления ордеров пользователя {user_id}: {e}")
+            return False
 
 
 # Create a singleton instance that will be imported and used throughout the application
