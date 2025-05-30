@@ -2,7 +2,7 @@ from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.filters import Command
 import asyncio
-from bot.commands.buy import monitor_order
+# from bot.commands.buy import monitor_order
 from bot.commands.autobuy import autobuy_loop
 from bot.utils.mexc import get_user_client
 from bot.utils.websocket_manager import websocket_manager
@@ -210,7 +210,7 @@ async def buy_handler(message: Message):
             await message.answer(response_text)
             return
 
-        spent = float(order_info["cummulativeQuoteQty"])  # 0.999371
+        spent = float(order_info["cummulativeQuoteQty"])
         if spent == 0:
             response_text = "❗ Ошибка при создании ордера (spent=0)."
             success = False
@@ -269,8 +269,8 @@ async def buy_handler(message: Message):
 
         logger.info(f"BUY + SELL for {user.telegram_id}: {executed_qty} {symbol} @ {real_price} -> {sell_price}")
 
-        # 8. Запускаем фоновый мониторинг ордера
-        asyncio.create_task(monitor_order(message, sell_order_id, user_order_number))
+        # 8. Не запускаем мониторинг - WebSocket будет отслеживать изменения
+        # Статус будет обновляться автоматически через WebSocket
 
     except Exception as e:
         logger.exception("Ошибка при выполнении /buy")

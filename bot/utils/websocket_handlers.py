@@ -44,25 +44,65 @@ async def handle_order_update(user_id: int, data: Dict[str, Any]):
 
 
 async def update_order_status(order_id: str, symbol: str, status: str):
-    """Update order status in the database."""
+    """Update order status in the database and notify user if needed."""
     try:
-        # Use sync_to_async to run DB operations in async context
         @sync_to_async
-        def update_deal():
+        def get_and_update_deal():
             try:
                 deal = Deal.objects.get(order_id=order_id)
-                deal.status = status
-                deal.save()
-                logger.info(f"Updated deal status: {deal.order_id} - {status}")
-                return deal
+                old_status = deal.status
+                # Обновляем только если статус изменился
+                if old_status != status:
+                    deal.status = status
+                    deal.save()
+                    logger.info(f"Updated deal status: {deal.order_id} - {old_status} -> {status}")
+                    return deal, old_status != status
+                return deal, False
             except Deal.DoesNotExist:
                 logger.warning(f"Deal with order_id {order_id} not found")
-                return None
+                return None, False
             except Exception as e:
                 logger.error(f"Error updating deal: {e}")
-                return None
+                return None, False
         
-        await update_deal()
+        deal, status_changed = await get_and_update_deal()
+        
+        # Если статус изменился и сделка найдена, отправляем уведомление
+        if status_changed and deal:
+            user = await sync_to_async(lambda: deal.user)()
+            
+            # Получаем бота для отправки сообщений
+            from aiogram import Bot
+            from django.conf import settings
+            bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+            
+            if status == "FILLED":
+                # Рассчитываем прибыль
+                buy_total = deal.quantity * deal.buy_price
+                sell_total = deal.quantity * deal.sell_price
+                profit = sell_total - buy_total
+                base = symbol[:3]
+                quote = symbol[3:]
+                
+                text = (
+                    f"✅ *СДЕЛКА {deal.user_order_number} ЗАВЕРШЕНА*\n\n"
+                    f"📦 Кол-во: `{deal.quantity:.6f}` {base}\n"
+                    f"💰 Продано по: `{deal.sell_price:.6f}` {quote}\n"
+                    f"📊 Прибыль: `{profit:.2f}` {quote}"
+                )
+                
+                await bot.send_message(user.telegram_id, text, parse_mode='Markdown')
+                
+            elif status == "CANCELED":
+                text = (
+                    f"❌ *СДЕЛКА {deal.user_order_number} ОТМЕНЕНА*\n\n"
+                    f"📦 Кол-во: `{deal.quantity:.6f}` {symbol[:3]}\n"
+                    f"💰 Куплено по: `{deal.buy_price:.6f}` {symbol[3:]}\n"
+                    f"📈 Продажа: `{deal.quantity:.4f}` {symbol[:3]} по {deal.sell_price:.6f} {symbol[3:]}\n"
+                )
+                
+                await bot.send_message(user.telegram_id, text, parse_mode='Markdown')
+                
     except Exception as e:
         logger.exception(f"Error in update_order_status: {e}")
 
