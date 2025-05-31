@@ -7,6 +7,9 @@ from logger import logger
 from users.models import User, Deal
 from asgiref.sync import sync_to_async
 
+# Импортируем функцию из autobuy.py
+from bot.commands.autobuy import process_order_update_for_autobuy
+
 
 async def handle_order_update(user_id: int, data: Dict[str, Any]):
     """
@@ -56,16 +59,20 @@ async def update_order_status(order_id: str, symbol: str, status: str):
                     deal.status = status
                     deal.save()
                     logger.info(f"Updated deal status: {deal.order_id} - {old_status} -> {status}")
-                    return deal, old_status != status
-                return deal, False
+                    return deal, old_status != status, deal.user.telegram_id
+                return deal, False, deal.user.telegram_id
             except Deal.DoesNotExist:
                 logger.warning(f"Deal with order_id {order_id} not found")
-                return None, False
+                return None, False, None
             except Exception as e:
                 logger.error(f"Error updating deal: {e}")
-                return None, False
+                return None, False, None
         
-        deal, status_changed = await get_and_update_deal()
+        deal, status_changed, user_id = await get_and_update_deal()
+        
+        # Если сделка найдена, передаем информацию в автобай (независимо от смены статуса)
+        if deal and user_id:
+            await handle_autobuy_order_update(order_id, symbol, status, user_id)
         
         # Если статус изменился и сделка найдена, отправляем уведомление
         if status_changed and deal:
@@ -152,3 +159,16 @@ async def handle_account_update(user_id: int, data: Dict[str, Any]):
             # For example, triggering alerts when balance changes significantly
     except Exception as e:
         logger.exception(f"Error handling account update for user {user_id}: {e}") 
+
+
+async def handle_autobuy_order_update(order_id: str, symbol: str, status: str, user_id: int):
+    """Специальный обработчик для ордеров автобая"""
+    try:
+        # Получаем сделку
+        deal = await sync_to_async(lambda: Deal.objects.filter(order_id=order_id, is_autobuy=True).first())()
+        
+        if deal:
+            # Вызываем обработчик для обновления состояния автобая
+            await process_order_update_for_autobuy(order_id, symbol, status, user_id)
+    except Exception as e:
+        logger.exception(f"Error in handle_autobuy_order_update: {e}") 

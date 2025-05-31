@@ -11,20 +11,79 @@ from mexc_sdk import Trade
 from logger import logger
 from decimal import Decimal
 from bot.constants import MAX_FAILS
+import json
+
+# Словарь для хранения состояния autobuy для каждого пользователя
+autobuy_states = {}  # {user_id: {'last_buy_price': float, 'active_orders': []}}
 
 async def autobuy_loop(message: Message, telegram_id: int):
     startup_fail_count = 0
 
     while startup_fail_count < MAX_FAILS:
         try:
+            # Импортируем websocket_manager внутри функции
+            from bot.utils.websocket_manager import websocket_manager
+            
             user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
             trade_client = Trade(api_key=user.api_key, api_secret=user.api_secret)
             symbol = user.pair.replace("/", "")
 
+            # Инициализируем состояние для пользователя, если его еще нет
+            if telegram_id not in autobuy_states:
+                autobuy_states[telegram_id] = {
+                    'active_orders': [],
+                    'last_buy_price': None,
+                    'current_price': None,
+                    'price_callbacks': []
+                }
+            
+            # Подписываемся на обновления цены через WebSocket
+            await websocket_manager.connect_market_data([symbol])
+            
+            # Регистрируем колбэк для обновления цены
+            async def update_price_for_autobuy(symbol_name, price_str):
+                price = float(price_str)
+                autobuy_states[telegram_id]['current_price'] = price
+                logger.debug(f"Обновление цены для autobuy {telegram_id}: {symbol_name} - {price}")
+            
+            autobuy_states[telegram_id]['price_callbacks'].append(update_price_for_autobuy)
+            await websocket_manager.register_price_callback(symbol, update_price_for_autobuy)
+            
+            # Восстанавливаем активные ордера из БД
+            deals_qs = Deal.objects.filter(
+                user=user,
+                status__in=["SELL_ORDER_PLACED", "NEW", "PARTIALLY_FILLED"],
+                is_autobuy=True
+            ).order_by("-created_at")
+            
+            active_deals = await sync_to_async(list)(deals_qs)
+            
+            # Заполняем активные ордера
             active_orders = []
-            last_buy_price = None
-            fail_count = 0
+            for deal in active_deals:
+                active_orders.append({
+                    "order_id": deal.order_id,
+                    "buy_price": float(deal.buy_price),
+                    "notified": False,
+                    "user_order_number": deal.user_order_number,
+                })
+            
+            autobuy_states[telegram_id]['active_orders'] = active_orders
+            
+            # Если есть активные ордера, устанавливаем last_buy_price на основе последнего
+            if active_orders:
+                most_recent_order = max(active_orders, key=lambda x: x.get("user_order_number", 0))
+                autobuy_states[telegram_id]['last_buy_price'] = most_recent_order["buy_price"]
 
+            # Получаем текущую цену через REST API для начала
+            ticker_data = trade_client.ticker_price(symbol)
+            handle_mexc_response(ticker_data, "Получение цены")
+            current_price = float(ticker_data["price"])
+            autobuy_states[telegram_id]['current_price'] = current_price
+
+            # Основной цикл автобая
+            fail_count = 0
+            
             while True:
                 try:
                     # Проверка подписки
@@ -40,14 +99,17 @@ async def autobuy_loop(message: Message, telegram_id: int):
                             del user_autobuy_tasks[telegram_id]
                         await message.answer("⛔ Ваша подписка закончилась. Автобай остановлен.")
                         break
+                    
+                    # Обновляем пользователя и его настройки
                     user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
                     buy_amount = float(user.buy_amount)
                     profit_percent = float(user.profit)
                     loss_threshold = float(user.loss)
-                    # Получение текущей цены
-                    ticker_data = trade_client.ticker_price(symbol)
-                    handle_mexc_response(ticker_data, "Получение цены")
-                    current_price = float(ticker_data["price"])
+                    
+                    # Получаем текущую цену из состояния (обновляется через WebSocket)
+                    current_price = autobuy_states[telegram_id]['current_price']
+                    last_buy_price = autobuy_states[telegram_id]['last_buy_price']
+                    active_orders = autobuy_states[telegram_id]['active_orders']
 
                     # Проверка условий для покупки
                     price_dropped = last_buy_price and ((last_buy_price - current_price) / last_buy_price * 100) >= loss_threshold
@@ -69,6 +131,8 @@ async def autobuy_loop(message: Message, telegram_id: int):
                                 f"🔻 Цена снизилась на `{drop_percent:.2f}%` от покупки по `{last_buy_price:.6f}` {symbol[3:]}\n",
                                 parse_mode="Markdown"
                             )
+                            
+                        # Выполняем покупку
                         buy_order = trade_client.new_order(symbol, "BUY", "MARKET", {"quoteOrderQty": buy_amount})
                         handle_mexc_response(buy_order, "Покупка")
                         order_id = buy_order["orderId"]
@@ -80,19 +144,21 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         executed_qty = float(order_info.get("executedQty", 0))
                         if executed_qty == 0:
                             await message.answer("❗ Ошибка при создании ордера (executedQty=0).")
-                            return
+                            continue
 
                         spent = float(order_info["cummulativeQuoteQty"])
                         if spent == 0:
                             await message.answer("❗ Ошибка при создании ордера (spent=0).")
-                            return
+                            continue
                         
                         real_price = spent / executed_qty if executed_qty > 0 else 0
                         
+                        # Обновляем last_buy_price в состоянии
+                        autobuy_states[telegram_id]['last_buy_price'] = real_price
+                        
                         # Расчёт цены продажи
                         sell_price = round(real_price * (1 + profit_percent / 100), 6)
-                        last_buy_price = real_price
-
+                        
                         # Создание лимитного ордера на продажу
                         sell_order = trade_client.new_order(symbol, "SELL", "LIMIT", {
                             "quantity": executed_qty,
@@ -102,8 +168,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         handle_mexc_response(sell_order, "Продажа")
                         sell_order_id = sell_order["orderId"]
                         logger.info(f"SELL ордер {sell_order_id} выставлен на {sell_price:.6f} {symbol[3:]}")
-                        sell_order_info = trade_client.query_order(symbol, {"orderId": sell_order_id})
-
+                        
                         # Сохраняем ордер в базу
                         last_number = await sync_to_async(Deal.objects.filter(user=user).count)()
                         user_order_number = last_number + 1
@@ -120,57 +185,30 @@ async def autobuy_loop(message: Message, telegram_id: int):
                             is_autobuy=True
                         )
 
-                        active_orders.append({
+                        # Добавляем ордер в список активных
+                        order_info = {
                             "order_id": sell_order_id,
                             "buy_price": real_price,
                             "notified": False,
                             "user_order_number": user_order_number,
-                        })
+                        }
+                        active_orders.append(order_info)
+                        autobuy_states[telegram_id]['active_orders'] = active_orders
 
                         await message.answer(
                             f"🟢 *СДЕЛКА {user_order_number} ОТКРЫТА*\n\n"
                             f"📉 Куплено по: `{real_price:.6f}` {symbol[3:]}\n"
                             f"📦 Кол-во: `{executed_qty:.6f}` {symbol[:3]}\n"
                             f"💸 Потрачено: `{spent:.2f}` {symbol[3:]}\n\n"
-                            f"📈 Лимит на продажу: `{sell_price:.6f}` {symbol[3:]}",
+                            f"📈 Лимит на продажу: `{sell_price:.6f}` {symbol[3:]}\n",
                             parse_mode="Markdown"
                         )
 
-                    # Проверка активных ордеров
-                    still_active = []
-                    orders_changed = False
-                    for sell_order_info in active_orders:
-                        result = await monitor_order_autobuy(
-                            message=message,
-                            trade_client=trade_client,
-                            symbol=symbol,
-                            order_info=sell_order_info,
-                        )
-                        if result == "ACTIVE":
-                            still_active.append(sell_order_info)
-                        else:
-                            orders_changed = True
-                            
-                    active_orders = still_active
+                    # Проверяем активные ордера через WebSocket
+                    # Нам не нужно делать периодические запросы, так как обновления придут автоматически
                     
-                    # Обновление last_buy_price
-                    if orders_changed:
-                        if active_orders:
-                            most_recent_order = max(active_orders, key=lambda x: x.get("user_order_number", 0))
-                            last_buy_price = most_recent_order["buy_price"]
-                            logger.info(f"Updated last_buy_price to {last_buy_price} from order #{most_recent_order['user_order_number']}")
-                        else:
-                            last_buy_price = None
-                            logger.info("Reset last_buy_price to None as no active orders remain")
-                            
-                    # Интервалы между проверками
-                    short_check_interval = 2  # сек — частота проверки активных ордеров
-
-                    if not active_orders:
-                        last_buy_price = None
-                        logger.info(f"Пауза автобая для юзера {telegram_id}: {user.pause} секунд ")
-                        await asyncio.sleep(user.pause)
-                    await asyncio.sleep(short_check_interval if active_orders else user.pause)
+                    # Интервалы между проверками логики
+                    await asyncio.sleep(2 if active_orders else user.pause)
 
                 except asyncio.CancelledError:
                     raise
@@ -186,6 +224,18 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         if task:
                             task.cancel()
                             del user_autobuy_tasks[telegram_id]
+                        
+                        # Удаляем колбэки и состояние
+                        if telegram_id in autobuy_states:
+                            # Импортируем websocket_manager внутри блока
+                            from bot.utils.websocket_manager import websocket_manager
+                            
+                            for callback in autobuy_states[telegram_id]['price_callbacks']:
+                                symbol_to_unregister = user.pair.replace("/", "")
+                                if symbol_to_unregister in websocket_manager.price_callbacks:
+                                    if callback in websocket_manager.price_callbacks[symbol_to_unregister]:
+                                        websocket_manager.price_callbacks[symbol_to_unregister].remove(callback)
+                            del autobuy_states[telegram_id]
                         break
                     await asyncio.sleep(30)
             break
@@ -199,6 +249,18 @@ async def autobuy_loop(message: Message, telegram_id: int):
             if task:
                 task.cancel()
                 del user_autobuy_tasks[telegram_id]
+            
+            # Удаляем колбэки и состояние
+            if telegram_id in autobuy_states:
+                # Импортируем websocket_manager внутри блока
+                from bot.utils.websocket_manager import websocket_manager
+                
+                for callback in autobuy_states[telegram_id]['price_callbacks']:
+                    symbol_to_unregister = user.pair.replace("/", "")
+                    if symbol_to_unregister in websocket_manager.price_callbacks:
+                        if callback in websocket_manager.price_callbacks[symbol_to_unregister]:
+                            websocket_manager.price_callbacks[symbol_to_unregister].remove(callback)
+                del autobuy_states[telegram_id]
             raise
 
         except Exception as e:
@@ -216,76 +278,32 @@ async def autobuy_loop(message: Message, telegram_id: int):
             del user_autobuy_tasks[telegram_id]
 
 
-
-async def monitor_order_autobuy(
-    message: Message,
-    trade_client: Trade,
-    symbol: str,
-    order_info: dict,
-    max_retries: int = 5,
-    retry_delay: int = 5,
-):
-    order_id = order_info["order_id"]
-    buy_price = order_info["buy_price"]
-    user_order_number = order_info.get("user_order_number")
-
-    if order_info.get("notified") is None:
-        order_info["notified"] = False
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            order_status = trade_client.query_order(symbol, options={"orderId": order_id})
-            handle_mexc_response(order_status, "Проверка ордера")
-            status = order_status.get("status")
-
-            if status == "CANCELED":
-                deal = await sync_to_async(Deal.objects.get)(order_id=order_id)
-                deal.status = "CANCELED"
-                deal.updated_at = timezone.now()
-                await sync_to_async(deal.save)()
-
-                await message.answer(
-                    f"❌ *СДЕЛКА {user_order_number} ОТМЕНЕНА*\n\n"
-                    f"📦 Кол-во: `{deal.quantity:.6f}` {deal.symbol[:3]}\n"
-                    f"💰 Куплено по: `{deal.buy_price:.6f}` {deal.symbol[3:]}\n"
-                    f"📈 Продажа: `{deal.quantity:.4f}` {deal.symbol[:3]} по {deal.sell_price:.6f} {deal.symbol[3:]}\n",
-                    parse_mode="Markdown"
-                )
-                return "CANCELED"
+# Добавим функцию для обработки обновлений ордеров autobuy через WebSocket
+async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
+    """Обработка обновлений ордеров для автобая через WebSocket"""
+    if user_id not in autobuy_states:
+        return
+    
+    active_orders = autobuy_states[user_id]['active_orders']
+    
+    # Ищем ордер среди активных
+    order_index = next((i for i, order in enumerate(active_orders) if order["order_id"] == order_id), None)
+    
+    if order_index is not None:
+        if status in ["FILLED", "CANCELED"]:
+            # Получаем информацию о завершенном ордере
+            order_info = active_orders[order_index]
             
-            if status == "FILLED":
-                deal = await sync_to_async(Deal.objects.get)(order_id=order_id)
-                deal.status = "FILLED"
-                deal.updated_at = timezone.now()
-                await sync_to_async(deal.save)()
-
-                total_received = Decimal(order_status.get("cummulativeQuoteQty", 0))
-                quantity = Decimal(order_status.get("executedQty", 0))
-                sell_price = total_received / quantity if quantity else 0
-                profit = total_received - (deal.buy_price * quantity)
-
-                await message.answer(
-                    f"✅ *СДЕЛКА {user_order_number} ЗАВЕРШЕНА*\n\n"
-                    f"📦 Кол-во: `{quantity:.6f}` {symbol[:3]}\n"
-                    f"💰 Продано по: `{sell_price:.6f}` {symbol[3:]}\n"
-                    f"📊 Прибыль: `{profit:.2f}` {symbol[3:]}",
-                    parse_mode="Markdown"
-                )
-                return "FILLED"
-
-            return "ACTIVE"
-
-        except asyncio.CancelledError:
-            return "CANCELLED"
-        except Exception as e:
-            logger.warning(f"Попытка {attempt}/{max_retries} — ошибка мониторинга ордера {order_id}: {e}")
-            if attempt < max_retries:
-                logger.error(f"Ошибка при получении статуса ордера {order_id}: {e}. Повтор через {retry_delay} секунд.")
-                await asyncio.sleep(retry_delay)
+            # Если ордер исполнен или отменен, удаляем его из активных
+            active_orders.pop(order_index)
+            autobuy_states[user_id]['active_orders'] = active_orders
+            
+            # Если нет больше активных ордеров, сбрасываем last_buy_price
+            if not active_orders:
+                autobuy_states[user_id]['last_buy_price'] = None
+                logger.info(f"Reset last_buy_price to None as no active orders remain for user {user_id}")
             else:
-                logger.error(f"Не удалось получить статус ордера {order_id} после {max_retries} попыток")
-                error_message = parse_mexc_error(e)
-                user_message = f"❌ {error_message}"
-                await message.answer(f"⚠️ Ошибка при проверке ордера {user_order_number}:")
-                await message.answer(user_message)
-                return "ACTIVE"
+                # Иначе устанавливаем last_buy_price по самому свежему ордеру
+                most_recent_order = max(active_orders, key=lambda x: x.get("user_order_number", 0))
+                autobuy_states[user_id]['last_buy_price'] = most_recent_order["buy_price"]
+                logger.info(f"Updated last_buy_price to {most_recent_order['buy_price']} for user {user_id} from order #{most_recent_order['user_order_number']}")

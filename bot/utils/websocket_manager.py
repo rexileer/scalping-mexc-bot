@@ -9,7 +9,6 @@ import hashlib
 
 from users.models import User
 from logger import logger
-from bot.utils.websocket_handlers import handle_order_update, handle_account_update, handle_price_update, update_order_status
 
 
 class MexcWebSocketManager:
@@ -128,6 +127,9 @@ class MexcWebSocketManager:
     async def handle_market_message(self, message: dict):
         """Handle incoming market data messages."""
         try:
+            # Импортируем handle_price_update внутри метода
+            from bot.utils.websocket_handlers import handle_price_update
+            
             # In MEXC's WebSocket API, the deal message structure is different
             # Check if it's a deal update message
             if isinstance(message, dict) and 's' in message and 'c' in message:
@@ -204,6 +206,9 @@ class MexcWebSocketManager:
         ws = self.user_connections[user_id]['ws']
         
         try:
+            # Импортируем обработчики внутри метода
+            from bot.utils.websocket_handlers import update_order_status, handle_order_update, handle_account_update
+            
             while not self.is_shutting_down and user_id in self.user_connections:
                 msg = await ws.receive()
                 
