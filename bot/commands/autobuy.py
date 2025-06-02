@@ -76,103 +76,120 @@ async def autobuy_loop(message: Message, telegram_id: int):
             if active_orders:
                 most_recent_order = max(active_orders, key=lambda x: x.get("user_order_number", 0))
                 autobuy_states[telegram_id]['last_buy_price'] = most_recent_order["buy_price"]
+                logger.info(f"Установлена цена последней покупки: {most_recent_order['buy_price']} для пользователя {telegram_id}")
             
-            # Проверяем, нет ли уже установленного соединения
+            # Проверяем, есть ли соединение с WebSocket для рыночных данных
+            if not websocket_manager.market_connection:
+                await websocket_manager.connect_market_data()
+                logger.info(f"Установлено соединение с WebSocket для рыночных данных")
+                
+            # Убедимся, что мы подписаны на обновления цены этой пары
             if symbol not in websocket_manager.market_subscriptions:
-                # Подписываемся на обновления цены через WebSocket только если еще не подписаны
-                await websocket_manager.connect_market_data([symbol])
+                await websocket_manager.subscribe_market_data([symbol])
                 logger.info(f"Подписались на данные рынка для {symbol}")
             
             # Регистрируем колбэк для обновления цены
             async def update_price_for_autobuy(symbol_name, price_str):
+                # ДОБАВЛЕНО: Логирование цены при каждом обновлении
+                logger.info(f"Price update for {symbol_name}: {price_str}") 
                 try:
                     # Проверяем, что пользователь все еще в режиме автобай
                     user_data = await sync_to_async(User.objects.filter(telegram_id=telegram_id, autobuy=True).exists)()
                     if not user_data:
-                        logger.info(f"Пропускаем обработку цены - пользователь {telegram_id} больше не в режиме автобай")
+                        # logger.info(f"Пропускаем обработку цены - пользователь {telegram_id} больше не в режиме автобай")
                         return
                         
-                    # Преобразуем цену в число
                     price = float(price_str)
-                    
-                    # Обновляем текущую цену
-                    old_price = autobuy_states[telegram_id]['current_price']
                     autobuy_states[telegram_id]['current_price'] = price
                     
-                    # Если система не готова или обрабатывает покупку - выходим
-                    if not autobuy_states[telegram_id].get('is_ready', False) or buy_lock.locked():
+                    # Получаем актуальные настройки пользователя
+                    user_settings = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
+                    loss_threshold = float(user_settings.loss)
+                    profit_percent = float(user_settings.profit)
+                    pause_seconds_on_rise = user_settings.pause # Пауза перед покупкой на росте
+                    symbol_base = symbol_name[:3] if len(symbol_name) > 3 else symbol_name
+                    symbol_quote = symbol_name[3:] if len(symbol_name) > 3 else "QUOTE"
+                    
+                    # Расширенное логирование для отладки
+                    log_prefix = f"Autobuy {telegram_id} ({symbol_name}):"
+                    current_price_log = f"Price={price:.6f} {symbol_quote}"
+                    last_buy_price_val = autobuy_states[telegram_id]['last_buy_price']
+                    last_buy_price_log = f"LastBuy={last_buy_price_val:.6f} {symbol_quote}" if last_buy_price_val is not None else "LastBuy=None"
+                    threshold_log = f"LossThr={loss_threshold:.2f}%, ProfitThr={profit_percent:.2f}%, PauseOnRise={pause_seconds_on_rise}s"
+                    is_ready_log = autobuy_states[telegram_id].get('is_ready', False)
+                    waiting_opportunity_log = autobuy_states[telegram_id].get('waiting_for_opportunity', False)
+                    active_orders_count = len(autobuy_states[telegram_id]['active_orders'])
+                    state_log = f"Ready={is_ready_log}, WaitingOpp={waiting_opportunity_log}, BuyLock={buy_lock.locked()}, ActiveOrders={active_orders_count}"
+                    logger.info(f"{log_prefix} Update - {current_price_log}, {last_buy_price_log}, {threshold_log}, {state_log}")
+                    
+                    if not is_ready_log:
+                        logger.debug(f"{log_prefix} System not ready. Skipping price processing.")
                         return
                     
-                    # Проверяем, не находимся ли мы в режиме ожидания после закрытия сделки
+                    if buy_lock.locked():
+                        logger.debug(f"{log_prefix} Buy operation in progress (lock active). Skipping further processing.")
+                        return
+                    
                     current_time = time.time()
                     restart_after = autobuy_states[telegram_id].get('restart_after', 0)
-                    waiting_for_opportunity = autobuy_states[telegram_id].get('waiting_for_opportunity', False)
                     
-                    if waiting_for_opportunity and restart_after > 0:
+                    if waiting_opportunity_log and restart_after > 0:
                         if current_time < restart_after:
-                            # Еще не время для новой покупки - лог только один раз
                             if not autobuy_states[telegram_id].get('waiting_reported', False):
                                 wait_time = restart_after - current_time
-                                logger.info(f"Ожидаем возможности новой покупки для {telegram_id}. Осталось {wait_time:.1f} секунд.")
+                                logger.info(f"{log_prefix} Waiting for new buy opportunity. Time left: {wait_time:.1f}s.")
                                 autobuy_states[telegram_id]['waiting_reported'] = True
                             return
                         else:
-                            # Время вышло, сбрасываем таймер и разрешаем покупку
                             autobuy_states[telegram_id]['restart_after'] = 0
                             autobuy_states[telegram_id]['waiting_for_opportunity'] = False
                             autobuy_states[telegram_id]['waiting_reported'] = False
-                            logger.info(f"Период ожидания после закрытия сделки истек для {telegram_id}, разрешаем новые покупки")
-                            
-                            # Сразу инициируем новую покупку после окончания периода ожидания
-                            user_settings = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
-                            await message.answer(f"🔄 Возобновляем автобай после паузы. Текущая цена: {price}")
+                            logger.info(f"{log_prefix} Wait period ended. Triggering 'after_waiting_period' buy. Current Price: {price:.6f} {symbol_quote}")
+                            await message.answer(f"🔄 Возобновляем автобай для {symbol_name} после паузы. Текущая цена: {price:.6f} {symbol_quote}")
                             asyncio.create_task(process_buy(telegram_id, "after_waiting_period", message, user_settings))
                             return
-                        
-                    # Получаем текущие параметры
+                    
                     last_buy_price = autobuy_states[telegram_id]['last_buy_price']
-                    user_settings = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
                     
-                    # Если нет последней покупки и не ждем возможности - это будет первая покупка
-                    if not last_buy_price and not waiting_for_opportunity:
-                        asyncio.create_task(process_buy(telegram_id, "initial_purchase", message, user_settings))
+                    # Если нет цены последней покупки и не в режиме ожидания - начинаем новый цикл (первая покупка или рестарт)
+                    if last_buy_price is None and not waiting_opportunity_log:
+                        logger.info(f"{log_prefix} Starting new buy cycle (no last_buy_price, not waiting). Price={price:.6f} {symbol_quote}")
+                        asyncio.create_task(process_buy(telegram_id, "new_buy_cycle", message, user_settings))
                         return
                     
-                    # Если нет активных ордеров (все закрылись) и не ждем возможности, начинаем цикл заново
-                    active_orders = autobuy_states[telegram_id]['active_orders']
-                    if not active_orders and not waiting_for_opportunity and not last_buy_price:
-                        asyncio.create_task(process_buy(telegram_id, "new_cycle", message, user_settings))
-                        return
-                    
-                    # Проверяем условия для покупки, только если есть последняя цена
-                    if last_buy_price:
-                        loss_threshold = float(user_settings.loss)
-                        profit_percent = float(user_settings.profit)
-                        
-                        # Проверка на падение цены
-                        if ((last_buy_price - price) / last_buy_price * 100) >= loss_threshold:
-                            drop_percent = (last_buy_price - price) / last_buy_price * 100
+                    # Основная логика покупок на росте/падении, если есть цена последней покупки
+                    if last_buy_price is not None:
+                        price_drop_percent = ((last_buy_price - price) / last_buy_price * 100) if last_buy_price > 0 else 0
+                        if price_drop_percent >= loss_threshold:
+                            logger.info(f"{log_prefix} Price drop condition met ({price_drop_percent:.2f}% >= {loss_threshold:.2f}%). LastBuy={last_buy_price:.6f}, Current={price:.6f} {symbol_quote}. Triggering 'price_drop' buy.")
                             await message.answer(
-                                f"⚠️ *Обнаружено падение цены*\n\n"
-                                f"🔻 Цена снизилась на `{drop_percent:.2f}%` от покупки по `{last_buy_price:.6f}` {symbol[3:]}\n",
+                                f"⚠️ *Обнаружено падение цены для {symbol_name}*\n\n"
+                                f"🔻 Цена (`{price:.6f} {symbol_quote}`) снизилась на `{price_drop_percent:.2f}%` от покупки по `{last_buy_price:.6f} {symbol_quote}`. \n"
+                                f"Покупаем по условию падения ({loss_threshold:.2f}%).",
                                 parse_mode="Markdown"
                             )
                             asyncio.create_task(process_buy(telegram_id, "price_drop", message, user_settings))
-                            
-                        # Проверка на рост цены
-                        elif ((price - last_buy_price) / last_buy_price * 100) >= profit_percent:
-                            rise_percent = (price - last_buy_price) / last_buy_price * 100
+                            return
+                        
+                        price_rise_percent = ((price - last_buy_price) / last_buy_price * 100) if last_buy_price > 0 else 0
+                        if price_rise_percent >= profit_percent:
+                            logger.info(f"{log_prefix} Price rise condition met ({price_rise_percent:.2f}% >= {profit_percent:.2f}%). LastBuy={last_buy_price:.6f}, Current={price:.6f} {symbol_quote}. Triggering 'price_rise' buy.")
                             await message.answer(
-                                f"⚠️ *Обнаружен рост цены*\n\n"
-                                f"🟢 Цена выросла на `{rise_percent:.2f}%` от покупки по `{last_buy_price:.6f}` {symbol[3:]}\n",
+                                f"⚠️ *Обнаружен рост цены для {symbol_name}*\n\n"
+                                f"🟢 Цена (`{price:.6f} {symbol_quote}`) выросла на `{price_rise_percent:.2f}%` от покупки по `{last_buy_price:.6f} {symbol_quote}`. \n"
+                                f"Покупаем по условию роста ({profit_percent:.2f}%).",
                                 parse_mode="Markdown"
                             )
-                            # Добавляем паузу перед покупкой на росте согласно настройкам пользователя
-                            await asyncio.sleep(user_settings.pause)
+                            if pause_seconds_on_rise > 0:
+                                logger.info(f"{log_prefix} Pausing for {pause_seconds_on_rise}s before 'price_rise' buy.")
+                                await message.answer(f"⏳ Пауза {pause_seconds_on_rise} сек. перед покупкой на росте.")
+                                await asyncio.sleep(pause_seconds_on_rise)
+                            logger.info(f"{log_prefix} Pause finished or skipped. Executing 'price_rise' buy task.")
                             asyncio.create_task(process_buy(telegram_id, "price_rise", message, user_settings))
+                            return
                         
                 except Exception as e:
-                    logger.error(f"Ошибка в обработчике цены autobuy для {telegram_id}: {e}")
+                    logger.error(f"Ошибка в обработчике цены autobuy для {telegram_id} ({symbol_name}): {e}", exc_info=True)
             
             # Сохраняем колбэк и регистрируем его
             autobuy_states[telegram_id]['price_callbacks'].append(update_price_for_autobuy)
@@ -183,16 +200,29 @@ async def autobuy_loop(message: Message, telegram_id: int):
             handle_mexc_response(ticker_data, "Получение цены")
             current_price = float(ticker_data["price"])
             autobuy_states[telegram_id]['current_price'] = current_price
+            logger.info(f"Получена начальная цена для {telegram_id}: {current_price}")
             
             # Отмечаем, что система готова обрабатывать обновления
             autobuy_states[telegram_id]['is_ready'] = True
             
             # Если нет активных ордеров и есть начальная цена, делаем первую покупку
             if not active_orders and current_price > 0:
+                logger.info(f"Запускаем первую покупку для {telegram_id} по цене {current_price}")
                 await process_buy(telegram_id, "initial_purchase", message, user)
             
             # Планируем задачу проверки ресурсов
             asyncio.create_task(periodic_resource_check(telegram_id))
+            
+            # Сообщаем пользователю, что автобай активирован
+            await message.answer(
+                f"✅ *Автобай активирован*\n\n"
+                f"📊 Текущая цена: `{current_price:.6f}` {symbol[3:]}\n"
+                f"💰 Сумма закупки: `{user.buy_amount}` {symbol[3:]}\n"
+                f"📈 Профит: `{user.profit}%`\n"
+                f"📉 Падение: `{user.loss}%`\n"
+                f"⏱️ Пауза: `{user.pause}` сек\n",
+                parse_mode="Markdown"
+            )
             
             # Ждем завершения автобая или отмены задачи
             while True:
@@ -527,6 +557,21 @@ async def periodic_resource_check(telegram_id: int):
             
             if waiting_for_opportunity and restart_after > 0 and current_time >= restart_after:
                 logger.info(f"Период ожидания истек для {telegram_id} (проверка ресурсов)")
+            
+            # Обновляем параметры пользователя
+            from bot.utils.websocket_manager import websocket_manager
+            
+            # Проверяем соединение с WebSocket и восстанавливаем при необходимости
+            user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
+            symbol = user.pair.replace("/", "")
+            
+            if not websocket_manager.market_connection:
+                logger.warning(f"Соединение с WebSocket для рынка потеряно, переподключаемся")
+                await websocket_manager.connect_market_data()
+                
+            if symbol not in websocket_manager.market_subscriptions:
+                logger.warning(f"Подписка на {symbol} отсутствует, переподписываемся")
+                await websocket_manager.subscribe_market_data([symbol])
             
         except Exception as e:
             logger.error(f"Ошибка в periodic_resource_check для {telegram_id}: {e}")

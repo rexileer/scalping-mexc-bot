@@ -132,23 +132,58 @@ class MexcWebSocketManager:
             
             # In MEXC's WebSocket API, the deal message structure is different
             # Check if it's a deal update message
-            if isinstance(message, dict) and 's' in message and 'c' in message:
-                # Example of deals stream: {'e': 'spot@public.deals.v3.api@BTCUSDT', 's': 'BTCUSDT', 't': 1234567890, 'p': '66123.45', 'q': '0.01234', 'c': '1'}
-                # Extract symbol from subscription stream (remove the prefix)
-                symbol = message.get('s')
-                price = message.get('p')  # Price is in 'p', not 'c'
-                
-                if symbol and price:
-                    # Process with the general handler
-                    await handle_price_update(symbol, price)
+            if isinstance(message, dict) and 's' in message and 'c' in message: # 'c' здесь это канал, а не цена
+                # Более точная проверка на сообщение о сделках (deals)
+                # Сообщение о сделках имеет структуру типа: {"c":"spot@public.deals.v3.api@KASUSDC","d":{"deals":[{"p":"0.087565","q":"553.6","T":1,"t":1701880076719,"v":"48.4805804"}]},"s":"KASUSDC","t":1701880076719}
+                # Или для одиночной сделки: {'e': 'spot@public.deals.v3.api@BTCUSDT', 's': 'BTCUSDT', 't': 1234567890, 'p': '66123.45', 'q': '0.01234', 'c': '1'}
+                # Новый формат от MEXC (из их документации) для канала spot@public.deals.v3.api@<symbol>
+                # присылает данные в ключе "d" -> "deals" -> массив объектов, где каждый объект это сделка с полями "p" (цена), "q" (количество) и т.д.
+                # или напрямую поля 's' (symbol), 'p' (price) в корне объекта, если это одиночная сделка из другого типа подписки или формата.
+
+                logger.debug(f"[MarketWS] Handling message: {message}")
+
+                symbol = message.get('s') # Символ есть в корне
+                price_data = None
+
+                if 'd' in message and 'deals' in message['d'] and message['d']['deals']:
+                    # Это массив сделок, берем цену из последней сделки в массиве
+                    latest_deal = message['d']['deals'][-1]
+                    price_data = latest_deal.get('p')
+                    logger.debug(f"[MarketWS] Extracted price {price_data} for {symbol} from deals array: {latest_deal}")
+                elif 'p' in message: 
+                    # Это одиночная сделка с ценой в корне (старый или альтернативный формат)
+                    price_data = message.get('p')
+                    logger.debug(f"[MarketWS] Extracted price {price_data} for {symbol} from root price field.")
+                else:
+                    logger.warning(f"[MarketWS] Could not extract price from message for symbol {symbol}: {message}")
+
+                if symbol and price_data:
+                    # Process with the general handler (если он вам нужен для других целей)
+                    # await handle_price_update(symbol, price_data) # Закомментировано, т.к. основная логика в autobuy
                     
+                    logger.info(f"[MarketWS] Price update for {symbol}: {price_data}")
+
                     # Call any registered callbacks
                     if symbol in self.price_callbacks:
+                        logger.debug(f"[MarketWS] Found {len(self.price_callbacks[symbol])} callbacks for {symbol}")
                         for callback in self.price_callbacks[symbol]:
                             try:
-                                await callback(symbol, price)
+                                logger.debug(f"[MarketWS] Calling callback {callback.__name__} for {symbol} with price {price_data}")
+                                await callback(symbol, price_data) # Передаем symbol и price_data
                             except Exception as e:
-                                logger.error(f"Error in price callback for {symbol}: {e}")
+                                logger.error(f"[MarketWS] Error in price callback for {symbol} ({callback.__name__}): {e}", exc_info=True)
+                    else:
+                        logger.debug(f"[MarketWS] No callbacks registered for symbol {symbol}. Callbacks: {self.price_callbacks.keys()}")
+                elif symbol:
+                    logger.warning(f"[MarketWS] Symbol {symbol} found, but no price data in message: {message}")
+            else:
+                # Это может быть ответ на подписку или другое сервисное сообщение
+                if message.get("method") == "SUBSCRIPTION" and message.get("code") == 0:
+                    logger.info(f"[MarketWS] Subscription successful response: {message}")
+                elif message.get("code") != 0 and message.get("msg"):
+                    logger.error(f"[MarketWS] Received error message response from MEXC: {message}")
+                else:
+                    logger.debug(f"[MarketWS] Received non-deal or unrecognized market message: {message}")
         except Exception as e:
             logger.error(f"Error handling market message: {e}")
     
@@ -355,36 +390,81 @@ class MexcWebSocketManager:
     
     async def _listen_market_messages(self):
         """Listen for messages from market data stream."""
-        if not self.market_connection:
+        if not self.market_connection or not self.market_connection.get('ws'):
+            logger.error("[MarketWS] Market connection or WebSocket not established for listening.")
             return
         
         ws = self.market_connection['ws']
+        logger.info(f"[MarketWS] Starting to listen for market messages on: {ws}")
         
         try:
-            while not self.is_shutting_down and self.market_connection:
-                msg = await ws.receive()
-                
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    data = json.loads(msg.data)
+            while not self.is_shutting_down and self.market_connection and not ws.closed:
+                try:
+                    msg = await ws.receive(timeout=30) # Добавляем таймаут для периодической проверки ws.closed
+                except asyncio.TimeoutError:
+                    logger.debug(f"[MarketWS] Timeout receiving message, checking connection.")
+                    if ws.closed:
+                        logger.warning("[MarketWS] WebSocket closed during receive timeout.")
+                        break
+                    # Если не закрыто, отправляем пинг для поддержания активности, если необходимо
+                    # await self.send_ping(ws) # Можно раскомментировать, если пинги из ping_loop не справляются
+                    continue 
+
+                if msg:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        logger.debug(f"[MarketWS] Received TEXT message: {msg.data[:500]}") # Логируем часть сообщения
+                        try:
+                            data = json.loads(msg.data)
+                        except json.JSONDecodeError as e:
+                            logger.error(f"[MarketWS] JSONDecodeError: {e} for data: {msg.data[:500]}")
+                            continue
+                        
+                        # Check for PONG response or other control messages
+                        if 'pong' in data:
+                            logger.debug(f"[MarketWS] Received PONG: {data}")
+                            continue
+                        if 'ping' in data: # Сервер может прислать ping
+                            logger.debug(f"[MarketWS] Received PING from server: {data}, sending PONG.")
+                            try:
+                                await ws.send_json({"pong": data['ping']})
+                            except Exception as e:
+                                logger.error(f"[MarketWS] Error sending PONG: {e}")
+                            continue
+                        # Проверяем ответ на подписку и другие ошибки тут, до передачи в handle_market_message
+                        if data.get("method") == "SUBSCRIPTION" and data.get("code") == 0:
+                            logger.info(f"[MarketWS] Subscription successful in _listen_market_messages: {data}")
+                            continue # Это сообщение об успешной подписке, не передаем его в handle_market_message
+                        if data.get("code") != 0 and data.get("msg"):
+                             logger.error(f"[MarketWS] Received error message from MEXC in _listen_market_messages: {data}")
+                             continue # Это сообщение об ошибке, не передаем его в handle_market_message
+
+                        # Process market data
+                        logger.debug(f"[MarketWS] Passing data to handle_market_message: {data}")
+                        await self.handle_market_message(data)
                     
-                    # Check for PONG response
-                    if 'pong' in data:
-                        # This is a pong response
-                        continue
+                    elif msg.type == aiohttp.WSMsgType.CLOSED:
+                        logger.warning(f"[MarketWS] WebSocket CLOSED message received. Reason: {ws.close_code}")
+                        break
                     
-                    # Process market data
-                    await self.handle_market_message(data)
-                
-                elif msg.type == aiohttp.WSMsgType.CLOSED:
-                    logger.warning("Market WebSocket closed")
-                    break
-                
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"Market WebSocket error: {ws.exception()}")
-                    break
+                    elif msg.type == aiohttp.WSMsgType.ERROR:
+                        logger.error(f"[MarketWS] WebSocket ERROR message received: {ws.exception()}")
+                        break
+                    elif msg.type == aiohttp.WSMsgType.CLOSING:
+                        logger.info("[MarketWS] WebSocket CLOSING message received.")
+                        break # Начинаем процесс закрытия
+                    else:
+                        logger.debug(f"[MarketWS] Received other message type: {msg.type}")
+                else:
+                    # msg is None, может произойти если соединение закрывается
+                    logger.warning("[MarketWS] Received None message, WebSocket might be closing.")
+                    if ws.closed:
+                         break # Выходим если сокет уже закрыт
+                    await asyncio.sleep(0.1) # Небольшая пауза
+
         except Exception as e:
-            logger.error(f"Error in market WebSocket: {e}")
+            logger.error(f"[MarketWS] Error in _listen_market_messages: {e}", exc_info=True)
         finally:
+            logger.warning("[MarketWS] Exited _listen_market_messages loop.")
             # Connection is closed, try to reconnect after a delay
             if not self.is_shutting_down:
                 logger.info(f"Reconnecting market WebSocket in {self.reconnect_delay} seconds")
