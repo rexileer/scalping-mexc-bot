@@ -172,6 +172,9 @@ async def autobuy_loop(message: Message, telegram_id: int):
                             return
                         
                         price_rise_percent = ((price - last_buy_price) / last_buy_price * 100) if last_buy_price > 0 else 0
+                        # ДОБАВЛЕНО: Логирование рассчитанного процента роста перед проверкой условия
+                        logger.info(f"{log_prefix} Calculated price_rise_percent = {price_rise_percent:.4f}% (Price: {price:.6f}, LastBuy: {last_buy_price:.6f})")
+
                         if price_rise_percent >= profit_percent:
                             logger.info(f"{log_prefix} Price rise condition met ({price_rise_percent:.2f}% >= {profit_percent:.2f}%). LastBuy={last_buy_price:.6f}, Current={price:.6f} {symbol_quote}. Triggering 'price_rise' buy.")
                             await message.answer(
@@ -484,10 +487,11 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
 async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
     """Обработка обновлений ордеров для автобая через WebSocket"""
     if user_id not in autobuy_states:
+        logger.debug(f"[AutobuyOrderUpdate] User {user_id} not in autobuy_states. Skipping.")
         return
     
     # Отладочный лог с полным состоянием
-    logger.info(f"Processing order update for user {user_id}: order_id={order_id}, status={status}, current_price={autobuy_states[user_id].get('current_price')}, last_buy_price={autobuy_states[user_id].get('last_buy_price')}")
+    logger.info(f"[AutobuyOrderUpdate] User {user_id}: Processing order_id={order_id}, symbol={symbol}, status={status}. Current Autobuy State: {autobuy_states[user_id]}")
     
     active_orders = autobuy_states[user_id]['active_orders']
     old_last_buy_price = autobuy_states[user_id].get('last_buy_price')
@@ -496,16 +500,20 @@ async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
     order_index = next((i for i, order in enumerate(active_orders) if order["order_id"] == order_id), None)
     
     if order_index is not None:
+        logger.info(f"[AutobuyOrderUpdate] User {user_id}: Found order {order_id} in active_orders at index {order_index}. Current active_orders: {active_orders}")
         if status in ["FILLED", "CANCELED"]:
             # Получаем информацию о завершенном ордере
             order_info = active_orders[order_index]
+            logger.info(f"[AutobuyOrderUpdate] User {user_id}: Order {order_id} (UserOrderNum: {order_info.get('user_order_number')}) has status {status}. Removing from active_orders.")
             
             # Если ордер исполнен или отменен, удаляем его из активных
             active_orders.pop(order_index)
             autobuy_states[user_id]['active_orders'] = active_orders
+            logger.info(f"[AutobuyOrderUpdate] User {user_id}: active_orders after removal: {autobuy_states[user_id]['active_orders']}")
             
             # Если не осталось активных ордеров, устанавливаем паузу перед следующей покупкой
             if not active_orders:
+                logger.info(f"[AutobuyOrderUpdate] User {user_id}: No active orders remaining.")
                 # Получаем пользовательские настройки для определения паузы
                 try:
                     user = await sync_to_async(User.objects.get)(telegram_id=user_id)
@@ -517,21 +525,28 @@ async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
                     autobuy_states[user_id]['restart_after'] = time.time() + pause_seconds
                     autobuy_states[user_id]['waiting_reported'] = False
                     
-                    logger.info(f"Reset last_buy_price to None as no active orders remain for user {user_id}. Next buy possible after {pause_seconds} seconds")
+                    logger.info(f"[AutobuyOrderUpdate] User {user_id}: Reset last_buy_price to None. waiting_for_opportunity=True. Next buy possible after {pause_seconds}s (at {autobuy_states[user_id]['restart_after']}).")
                 except Exception as e:
-                    logger.error(f"Ошибка при установке паузы после закрытия ордера: {e}")
+                    logger.error(f"[AutobuyOrderUpdate] User {user_id}: Error getting user settings for pause: {e}")
                     # Если не удалось получить настройки паузы, просто сбрасываем last_buy_price
                     autobuy_states[user_id]['last_buy_price'] = None
-                    logger.info(f"Reset last_buy_price to None as no active orders remain for user {user_id}")
+                    logger.info(f"[AutobuyOrderUpdate] User {user_id}: Reset last_buy_price to None (error case).")
             else:
                 # Иначе устанавливаем last_buy_price по самому свежему ордеру
                 most_recent_order = max(active_orders, key=lambda x: x.get("user_order_number", 0))
                 autobuy_states[user_id]['last_buy_price'] = most_recent_order["buy_price"]
-                logger.info(f"Updated last_buy_price to {most_recent_order['buy_price']} for user {user_id} from order #{most_recent_order['user_order_number']}")
+                logger.info(f"[AutobuyOrderUpdate] User {user_id}: Updated last_buy_price to {most_recent_order['buy_price']} from active order #{most_recent_order['user_order_number']}. Active orders count: {len(active_orders)}")
+        else:
+            logger.info(f"[AutobuyOrderUpdate] User {user_id}: Order {order_id} status is {status} (not FILLED/CANCELED). No state change.")
+    else:
+        logger.info(f"[AutobuyOrderUpdate] User {user_id}: Order {order_id} not found in active_orders. Current active_orders: {active_orders}")
 
     # Лог изменений
-    if old_last_buy_price != autobuy_states[user_id].get('last_buy_price'):
-        logger.info(f"last_buy_price changed for user {user_id}: {old_last_buy_price} -> {autobuy_states[user_id].get('last_buy_price')}")
+    new_last_buy_price = autobuy_states[user_id].get('last_buy_price')
+    if old_last_buy_price != new_last_buy_price:
+        logger.info(f"[AutobuyOrderUpdate] User {user_id}: last_buy_price changed from {old_last_buy_price} to {new_last_buy_price}.")
+    elif status in ["FILLED", "CANCELED"] and order_index is not None:
+        logger.info(f"[AutobuyOrderUpdate] User {user_id}: last_buy_price remains {new_last_buy_price} after processing order {order_id} ({status}).")
 
 
 async def periodic_resource_check(telegram_id: int):
