@@ -60,7 +60,7 @@ async def monitor_order(message: Message, order_id: str, user_order_number: int)
                     f"✅ *СДЕЛКА {user_order_number} ЗАВЕРШЕНА*\n\n"
                     f"📦 Кол-во: `{deal.quantity:.6f}` {base}\n"
                     f"💰 Продано по: `{deal.sell_price:.6f}` {quote}\n"
-                    f"📊 Прибыль: `{profit:.2f}` {quote}"
+                    f"📊 Прибыль: `{profit:.4f}` {quote}"
                 )
 
                 await message.answer(text, parse_mode='Markdown')

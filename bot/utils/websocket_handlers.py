@@ -95,7 +95,7 @@ async def update_order_status(order_id: str, symbol: str, status: str):
                     f"✅ *СДЕЛКА {deal.user_order_number} ЗАВЕРШЕНА*\n\n"
                     f"📦 Кол-во: `{deal.quantity:.6f}` {base}\n"
                     f"💰 Продано по: `{deal.sell_price:.6f}` {quote}\n"
-                    f"📊 Прибыль: `{profit:.2f}` {quote}"
+                    f"📊 Прибыль: `{profit:.4f}` {quote}"
                 )
                 
                 await bot.send_message(user.telegram_id, text, parse_mode='Markdown')

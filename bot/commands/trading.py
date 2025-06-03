@@ -125,8 +125,8 @@ async def balance_handler(message: Message):
 
             balances_message += (
                 f"\n<b>{asset}</b>\n"
-                f"Доступно: {format(free, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}\n"
-                f"Заморожено: {format(locked, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
+                f"Доступно: {format(free, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}\n"
+                f"Заморожено: {format(locked, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
             )
 
         orders = client.open_orders(symbol=pair)
@@ -140,7 +140,7 @@ async def balance_handler(message: Message):
         orders_message = (
             f"\n\n📄 <b>Ордера</b>\n"
             f"Количество: {format(total_order_amount, ',.0f').replace(',', ' ')}\n"
-            f"Сумма исполнения: {format(total_order_value, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.')} {quote_asset}\n"
+            f"Сумма исполнения: {format(total_order_value, ',.4f').replace(',', 'X').replace('.', ',').replace('X', '.')} {quote_asset}\n"
             f"Средняя цена исполнения: {format(avg_price, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.')} {quote_asset}"
         )
 
