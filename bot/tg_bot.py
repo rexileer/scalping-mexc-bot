@@ -25,6 +25,7 @@ from bot.middlewares.logging_middleware import LoggingMiddleware
 from bot.utils.set_commands import set_default_commands
 from bot.utils.log_cleaner import start_log_cleaner
 from bot.utils.websocket_manager import websocket_manager
+from bot.utils.autobuy_restart import restart_autobuy_for_users
 from django.conf import settings
 
 config = load_config()
@@ -78,6 +79,10 @@ async def main():
             'version': '1.0',
             'environment': os.environ.get('DJANGO_SETTINGS_MODULE', 'unknown')
         })
+        
+        # Рестарт autobuy для пользователей с активным статусом
+        logger.info("Restarting autobuy for users with active status...")
+        autobuy_restart_task = asyncio.create_task(restart_autobuy_for_users())
         
         # Запускаем бота
         logger.info("Starting polling...")
