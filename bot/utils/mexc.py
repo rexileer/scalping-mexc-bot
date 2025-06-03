@@ -2,6 +2,7 @@ import hmac
 import hashlib
 import time
 import requests
+import aiohttp
 from mexc_sdk import Spot
 from users.models import User
 from logger import logger
@@ -25,7 +26,8 @@ def get_actual_order_status(user: User, symbol: str, order_id: str) -> str:
         logger.exception(f"Ошибка при получении статуса ордера {order_id}: {e}")
         return "ERROR"
 
-def check_mexc_keys(api_key: str, api_secret: str) -> bool:
+# Синхронная версия для обратной совместимости
+def check_mexc_keys(api_key: str, api_secret: str) -> tuple:
     url = "https://api.mexc.com/api/v3/account"
     timestamp = int(time.time() * 1000)
 
@@ -45,6 +47,43 @@ def check_mexc_keys(api_key: str, api_secret: str) -> bool:
         error = parse_mexc_error(response.text)
 
     return response.status_code == 200, error
+
+# Новая асинхронная версия
+async def check_mexc_keys_async(api_key: str, api_secret: str) -> tuple:
+    url = "https://api.mexc.com/api/v3/account"
+    timestamp = int(time.time() * 1000)
+
+    query_string = f"timestamp={timestamp}"
+    signature = hmac.new(api_secret.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+
+    headers = {
+        "X-MEXC-APIKEY": api_key
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{url}?{query_string}&signature={signature}", headers=headers) as response:
+                status_code = response.status
+                response_text = await response.text()
+                logger.info(f"Response status code: {status_code}, response text: {response_text}")
+                
+                # Проверяем наличие ошибок
+                if status_code != 200:
+                    # Обработка ошибки IP whitelist
+                    if "700006" in response_text and "ip white list" in response_text.lower():
+                        error_msg = "IP адрес вашего сервера не добавлен в белый список. Пожалуйста, откройте настройки API ключа на MEXC и добавьте IP ограничения, либо уберите ограничения по IP."
+                        logger.warning(f"IP не в белом списке: {response_text}")
+                        return False, error_msg
+                    
+                    # Другие ошибки
+                    error = parse_mexc_error(response_text)
+                    return False, error
+                
+                # Если статус 200, ключи валидны
+                return True, ""
+    except Exception as e:
+        logger.error(f"Ошибка при проверке ключей API: {e}")
+        return False, f"Ошибка соединения: {str(e)}"
 
 
 # Функция для получения клиента и валютной пары

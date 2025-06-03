@@ -3,7 +3,7 @@ import json
 import time
 import logging
 import aiohttp
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable, Any, Tuple
 import hmac
 import hashlib
 
@@ -26,9 +26,15 @@ class MexcWebSocketManager:
         self.price_callbacks: Dict[str, List[Callable]] = {}  # {symbol: [callbacks]}
         self.reconnect_delay = 1  # Initial reconnect delay in seconds
         self.is_shutting_down = False
+        self.reconnecting_users = set()  # Set to track users currently in reconnection process
     
-    async def get_listen_key(self, api_key: str, api_secret: str) -> str:
-        """Get a listen key for user data streams."""
+    async def get_listen_key(self, api_key: str, api_secret: str) -> Tuple[bool, str, Optional[str]]:
+        """
+        Get a listen key for user data streams.
+        
+        Returns:
+            Tuple[bool, str, Optional[str]]: (success, error_message, listen_key)
+        """
         endpoint = "/api/v3/userDataStream"
         url = f"{self.REST_API_URL}{endpoint}"
         
@@ -49,15 +55,36 @@ class MexcWebSocketManager:
         # Add timestamp and signature to the URL
         request_url = f"{url}?{query_string}&signature={signature}"
         
-        async with aiohttp.ClientSession() as session:
-            async with session.post(request_url, headers=headers) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    logger.error(f"Failed to get listen key: {error_text}")
-                    raise Exception(f"Failed to get listen key: {response.status}")
-                
-                data = await response.json()
-                return data.get("listenKey")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(request_url, headers=headers) as response:
+                    response_text = await response.text()
+                    logger.info(f"Listen key API response: {response.status} - {response_text}")
+                    
+                    if response.status != 200:
+                        # Обрабатываем ошибку связанную с IP ограничениями
+                        if "700006" in response_text and "ip white list" in response_text.lower():
+                            error_msg = "IP адрес сервера не добавлен в белый список API ключа. Пожалуйста, настройте IP ограничения в настройках ключа на MEXC."
+                            logger.warning(f"IP whitelist error for listen key: {response_text}")
+                            return False, error_msg, None
+                        
+                        error_text = f"Failed to get listen key: {response_text}"
+                        logger.error(error_text)
+                        return False, error_text, None
+                    
+                    try:
+                        data = json.loads(response_text)
+                        listen_key = data.get("listenKey")
+                        if listen_key:
+                            return True, "", listen_key
+                        else:
+                            return False, "No listen key in response", None
+                    except json.JSONDecodeError:
+                        return False, f"Invalid JSON response: {response_text}", None
+        except Exception as e:
+            error_msg = f"Error getting listen key: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg, None
     
     async def keep_listen_key_alive(self, user_id: int, api_key: str, api_secret: str):
         """Keep the listen key alive with periodic pings."""
@@ -156,13 +183,13 @@ class MexcWebSocketManager:
                     logger.debug(f"[MarketWS] Extracted price {price_data} for {symbol} from root price field.")
                 else:
                     logger.warning(f"[MarketWS] Could not extract price from message for symbol {symbol}: {message}")
-
+                
                 if symbol and price_data:
                     # Process with the general handler (если он вам нужен для других целей)
                     # await handle_price_update(symbol, price_data) # Закомментировано, т.к. основная логика в autobuy
                     
                     logger.info(f"[MarketWS] Price update for {symbol}: {price_data}")
-
+                    
                     # Call any registered callbacks
                     if symbol in self.price_callbacks:
                         logger.debug(f"[MarketWS] Found {len(self.price_callbacks[symbol])} callbacks for {symbol}")
@@ -187,50 +214,84 @@ class MexcWebSocketManager:
         except Exception as e:
             logger.error(f"Error handling market message: {e}")
     
-    async def connect_user_data_stream(self, user_id: int):
+    async def connect_user_data_stream(self, user_id: int) -> bool:
         """Connect to user data stream for a specific user."""
+        # Если пользователь уже в процессе переподключения, просто ждем и возвращаем True
+        if user_id in self.reconnecting_users:
+            logger.info(f"User {user_id} is already in reconnection process. Skipping.")
+            await asyncio.sleep(0.5)  # Небольшая задержка для завершения текущего процесса переподключения
+            return True
+        
+        # Добавляем пользователя в список переподключающихся
+        self.reconnecting_users.add(user_id)
+        
         try:
+            # Сначала отключаем существующее соединение
+            if user_id in self.user_connections:
+                await self.disconnect_user(user_id)
+                # Небольшая задержка перед повторным подключением
+                await asyncio.sleep(1)
+            
             user = await User.objects.aget(telegram_id=user_id)
             
             if not user.api_key or not user.api_secret:
                 logger.warning(f"User {user_id} missing API keys")
+                self.reconnecting_users.remove(user_id)
                 return False
             
             # Get a listen key for the user
-            listen_key = await self.get_listen_key(user.api_key, user.api_secret)
+            success, error_message, listen_key = await self.get_listen_key(user.api_key, user.api_secret)
+            if not success:
+                logger.error(f"Error connecting user {user_id} to WebSocket: {error_message}")
+                self.reconnecting_users.remove(user_id)
+                return False
+                
             ws_url = f"{self.BASE_URL}?listenKey={listen_key}"
             
             # Create WebSocket connection
             session = aiohttp.ClientSession()
-            ws = await session.ws_connect(ws_url)
+            try:
+                ws = await session.ws_connect(ws_url)
+            except Exception as e:
+                await session.close()
+                logger.error(f"Error connecting to WebSocket for user {user_id}: {e}")
+                self.reconnecting_users.remove(user_id)
+                return False
             
             # Store connection info
             self.user_connections[user_id] = {
                 'ws': ws,
                 'session': session,
-                'listen_key': listen_key
+                'listen_key': listen_key,
+                'tasks': []  # Список для хранения задач
             }
             
             # Start ping loop to keep connection alive
             ping_task = asyncio.create_task(self.ping_loop(ws, user_id))
             self.ping_tasks[user_id] = ping_task
+            self.user_connections[user_id]['tasks'].append(ping_task)
             
             # Start task to keep listen key alive
             keep_alive_task = asyncio.create_task(
                 self.keep_listen_key_alive(user_id, user.api_key, user.api_secret)
             )
             self.user_connections[user_id]['keep_alive_task'] = keep_alive_task
+            self.user_connections[user_id]['tasks'].append(keep_alive_task)
             
             # Start listening for messages
-            asyncio.create_task(self._listen_user_messages(user_id))
+            listen_task = asyncio.create_task(self._listen_user_messages(user_id))
+            self.user_connections[user_id]['tasks'].append(listen_task)
             
             # После успешного подключения подписываемся на ордера
             await self.subscribe_user_orders(user_id)
             
             logger.info(f"Connected user {user_id} to WebSocket and subscribed to orders")
+            self.reconnecting_users.remove(user_id)
             return True
         except Exception as e:
             logger.error(f"Error connecting user {user_id} to WebSocket: {e}")
+            if user_id in self.reconnecting_users:
+                self.reconnecting_users.remove(user_id)
             return False
     
     async def _listen_user_messages(self, user_id: int):
@@ -245,7 +306,19 @@ class MexcWebSocketManager:
             from bot.utils.websocket_handlers import update_order_status, handle_order_update, handle_account_update
             
             while not self.is_shutting_down and user_id in self.user_connections:
-                msg = await ws.receive()
+                try:
+                    msg = await ws.receive(timeout=30)
+                except asyncio.TimeoutError:
+                    # Проверяем соединение с помощью пинга
+                    if ws.closed:
+                        logger.warning(f"WebSocket for user {user_id} closed during receive timeout.")
+                        break
+                    try:
+                        await self.send_ping(ws)
+                        continue
+                    except Exception:
+                        logger.warning(f"Failed to send ping for user {user_id}, connection may be broken.")
+                        break
                 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     data = json.loads(msg.data)
@@ -313,16 +386,23 @@ class MexcWebSocketManager:
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     logger.error(f"WebSocket error for user {user_id}: {ws.exception()}")
                     break
+        except (asyncio.CancelledError, GeneratorExit):
+            logger.info(f"WebSocket listener task cancelled for user {user_id}")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error in WebSocket for user {user_id}: {e}")
         except Exception as e:
             logger.error(f"Error in user WebSocket for {user_id}: {e}")
         finally:
-            # Connection is closed, try to reconnect after a delay
-            if not self.is_shutting_down:
+            # Connection is closed, try to reconnect after a delay if we're not shutting down
+            # and the user is not already being reconnected
+            if not self.is_shutting_down and user_id not in self.reconnecting_users:
                 logger.info(f"Reconnecting user {user_id} WebSocket in {self.reconnect_delay} seconds")
                 await asyncio.sleep(self.reconnect_delay)
                 self.reconnect_delay = min(self.reconnect_delay * 2, 60)  # Exponential backoff
-                await self.disconnect_user(user_id)
-                await self.connect_user_data_stream(user_id)
+                
+                # Если пользователь еще в соединениях, пробуем переподключить
+                if user_id in self.user_connections:
+                    asyncio.create_task(self.connect_user_data_stream(user_id))
     
     async def connect_market_data(self, symbols: List[str] = None):
         """
@@ -407,7 +487,7 @@ class MexcWebSocketManager:
                         logger.warning("[MarketWS] WebSocket closed during receive timeout.")
                         break
                     # Если не закрыто, отправляем пинг для поддержания активности, если необходимо
-                    # await self.send_ping(ws) # Можно раскомментировать, если пинги из ping_loop не справляются
+                    await self.send_ping(ws)
                     continue 
 
                 if msg:
@@ -418,7 +498,7 @@ class MexcWebSocketManager:
                         except json.JSONDecodeError as e:
                             logger.error(f"[MarketWS] JSONDecodeError: {e} for data: {msg.data[:500]}")
                             continue
-                        
+                    
                         # Check for PONG response or other control messages
                         if 'pong' in data:
                             logger.debug(f"[MarketWS] Received PONG: {data}")
@@ -437,15 +517,15 @@ class MexcWebSocketManager:
                         if data.get("code") != 0 and data.get("msg"):
                              logger.error(f"[MarketWS] Received error message from MEXC in _listen_market_messages: {data}")
                              continue # Это сообщение об ошибке, не передаем его в handle_market_message
-
+                    
                         # Process market data
                         logger.debug(f"[MarketWS] Passing data to handle_market_message: {data}")
                         await self.handle_market_message(data)
-                    
+                
                     elif msg.type == aiohttp.WSMsgType.CLOSED:
                         logger.warning(f"[MarketWS] WebSocket CLOSED message received. Reason: {ws.close_code}")
                         break
-                    
+                
                     elif msg.type == aiohttp.WSMsgType.ERROR:
                         logger.error(f"[MarketWS] WebSocket ERROR message received: {ws.exception()}")
                         break
@@ -460,7 +540,6 @@ class MexcWebSocketManager:
                     if ws.closed:
                          break # Выходим если сокет уже закрыт
                     await asyncio.sleep(0.1) # Небольшая пауза
-
         except Exception as e:
             logger.error(f"[MarketWS] Error in _listen_market_messages: {e}", exc_info=True)
         finally:
@@ -487,50 +566,80 @@ class MexcWebSocketManager:
     async def disconnect_user(self, user_id: int):
         """Disconnect a user from WebSocket."""
         if user_id in self.user_connections:
+            logger.info(f"Disconnecting user {user_id} from WebSocket")
             try:
+                # Cancel all tasks associated with this user
+                connection_data = self.user_connections[user_id]
+                
                 # Cancel ping task
                 if user_id in self.ping_tasks:
-                    self.ping_tasks[user_id].cancel()
-                    del self.ping_tasks[user_id]
+                    try:
+                        self.ping_tasks[user_id].cancel()
+                    except Exception as e:
+                        logger.error(f"Error cancelling ping task for user {user_id}: {e}")
+                    finally:
+                        del self.ping_tasks[user_id]
                 
-                # Cancel keep alive task
-                if 'keep_alive_task' in self.user_connections[user_id]:
-                    self.user_connections[user_id]['keep_alive_task'].cancel()
+                # Cancel keep alive task and other tasks
+                if 'tasks' in connection_data:
+                    for task in connection_data['tasks']:
+                        try:
+                            if not task.done() and not task.cancelled():
+                                task.cancel()
+                                # Ждем немного для завершения отмены
+                                try:
+                                    await asyncio.wait_for(asyncio.shield(task), timeout=0.5)
+                                except (asyncio.TimeoutError, asyncio.CancelledError):
+                                    pass
+                        except Exception as e:
+                            logger.error(f"Error cancelling task for user {user_id}: {e}")
                 
-                # Close WebSocket
-                await self.user_connections[user_id]['ws'].close()
+                # Ensure WebSocket is closed
+                if 'ws' in connection_data and not connection_data['ws'].closed:
+                    try:
+                        await connection_data['ws'].close()
+                    except Exception as e:
+                        logger.error(f"Error closing WebSocket for user {user_id}: {e}")
                 
-                # Close session
-                await self.user_connections[user_id]['session'].close()
+                # Ensure session is closed
+                if 'session' in connection_data and not connection_data['session'].closed:
+                    try:
+                        await connection_data['session'].close()
+                    except Exception as e:
+                        logger.error(f"Error closing session for user {user_id}: {e}")
                 
                 # Delete listen key
-                listen_key = self.user_connections[user_id]['listen_key']
-                user = await User.objects.aget(telegram_id=user_id)
+                listen_key = connection_data.get('listen_key')
+                if listen_key:
+                    try:
+                        user = await User.objects.aget(telegram_id=user_id)
+                        if user.api_key and user.api_secret:
+                            endpoint = "/api/v3/userDataStream"
+                            url = f"{self.REST_API_URL}{endpoint}"
+                            
+                            # Generate timestamp and signature for authentication
+                            timestamp = int(time.time() * 1000)
+                            query_string = f"timestamp={timestamp}&listenKey={listen_key}"
+                            signature = hmac.new(
+                                user.api_secret.encode(), 
+                                query_string.encode(), 
+                                hashlib.sha256
+                            ).hexdigest()
+                            
+                            headers = {
+                                "X-MEXC-APIKEY": user.api_key,
+                                "Content-Type": "application/json"
+                            }
+                            
+                            # Add timestamp and signature to the URL
+                            request_url = f"{url}?{query_string}&signature={signature}"
+                            
+                            async with aiohttp.ClientSession() as session:
+                                await session.delete(request_url, headers=headers)
+                    except Exception as e:
+                        logger.error(f"Error deleting listen key for user {user_id}: {e}")
                 
-                if user.api_key and user.api_secret and listen_key:
-                    endpoint = "/api/v3/userDataStream"
-                    url = f"{self.REST_API_URL}{endpoint}"
-                    
-                    # Generate timestamp and signature for authentication
-                    timestamp = int(time.time() * 1000)
-                    query_string = f"timestamp={timestamp}&listenKey={listen_key}"
-                    signature = hmac.new(
-                        user.api_secret.encode(), 
-                        query_string.encode(), 
-                        hashlib.sha256
-                    ).hexdigest()
-                    
-                    headers = {
-                        "X-MEXC-APIKEY": user.api_key,
-                        "Content-Type": "application/json"
-                    }
-                    
-                    # Add timestamp and signature to the URL
-                    request_url = f"{url}?{query_string}&signature={signature}"
-                    
-                    async with aiohttp.ClientSession() as session:
-                        await session.delete(request_url, headers=headers)
-                
+                # Finally, remove from user_connections
                 del self.user_connections[user_id]
                 logger.info(f"Disconnected user {user_id} from WebSocket")
             except Exception as e:
