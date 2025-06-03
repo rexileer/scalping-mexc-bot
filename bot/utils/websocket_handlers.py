@@ -6,6 +6,7 @@ from decimal import Decimal
 from logger import logger
 from users.models import User, Deal
 from asgiref.sync import sync_to_async
+from bot.utils.bot_utils import send_message_safely
 
 # Импортируем функцию из autobuy.py
 from bot.commands.autobuy import process_order_update_for_autobuy
@@ -78,11 +79,6 @@ async def update_order_status(order_id: str, symbol: str, status: str):
         if status_changed and deal:
             user = await sync_to_async(lambda: deal.user)()
             
-            # Получаем бота для отправки сообщений
-            from aiogram import Bot
-            from django.conf import settings
-            bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
-            
             if status == "FILLED":
                 # Рассчитываем прибыль
                 buy_total = deal.quantity * deal.buy_price
@@ -98,7 +94,7 @@ async def update_order_status(order_id: str, symbol: str, status: str):
                     f"📊 Прибыль: `{profit:.4f}` {quote}"
                 )
                 
-                await bot.send_message(user.telegram_id, text, parse_mode='Markdown')
+                await send_message_safely(user.telegram_id, text, parse_mode='Markdown')
                 
             elif status == "CANCELED":
                 text = (
@@ -108,7 +104,7 @@ async def update_order_status(order_id: str, symbol: str, status: str):
                     f"📈 Продажа: `{deal.quantity:.4f}` {symbol[:3]} по {deal.sell_price:.6f} {symbol[3:]}\n"
                 )
                 
-                await bot.send_message(user.telegram_id, text, parse_mode='Markdown')
+                await send_message_safely(user.telegram_id, text, parse_mode='Markdown')
                 
     except Exception as e:
         logger.exception(f"Error in update_order_status: {e}")

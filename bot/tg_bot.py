@@ -16,7 +16,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from bot.daily_stats import start_scheduler
-from bot.config import load_config
+from bot.config import load_config, bot_instance
 from bot.logger import logger, log_to_db
 from bot.routers import setup_routers
 from bot.middlewares.access_middleware import AccessMiddleware
@@ -33,10 +33,14 @@ config = load_config()
 async def main():
     try:
         logger.info("Starting bot initialization...")
+        global bot_instance
         bot = Bot(
             token=config.bot_token,
             default=DefaultBotProperties(parse_mode=ParseMode.HTML)
         )
+        # Сохраняем экземпляр бота в глобальную переменную для доступа из других модулей
+        bot_instance = bot
+        
         dp = Dispatcher(storage=MemoryStorage())
 
         # Подключаем все маршрутизаторы
@@ -110,6 +114,8 @@ async def main():
                     'type': 'bot_stop',
                 })
                 await bot.close()
+                # Очищаем глобальную переменную
+                bot_instance = None
             except Exception as close_error:
                 logger.error(f"Error while closing bot: {close_error}")
 
