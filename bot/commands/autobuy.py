@@ -48,7 +48,12 @@ async def autobuy_loop(message: Message, telegram_id: int):
                     'is_ready': False,
                     'waiting_for_opportunity': False,  # Флаг ожидания новой возможности
                     'restart_after': 0,  # Временная метка для возобновления покупок
-                    'waiting_reported': False  # Флаг для отслеживания, сообщили ли мы о том, что ожидаем
+                    'waiting_reported': False,  # Флаг для отслеживания, сообщили ли мы о том, что ожидаем
+                    'consecutive_errors': 0,  # Счетчик последовательных ошибок
+                    'last_drop_notification': 0,  # Время последнего уведомления о падении
+                    'last_rise_notification': 0,  # Время последнего уведомления о росте
+                    'last_buy_success_time': 0,  # Время последней успешной покупки
+                    'last_order_filled_time': 0  # Время последнего завершения сделки
                 }
             
             # Восстанавливаем активные ордера из БД
@@ -96,17 +101,16 @@ async def autobuy_loop(message: Message, telegram_id: int):
                     # Проверяем, что пользователь все еще в режиме автобай
                     user_data = await sync_to_async(User.objects.filter(telegram_id=telegram_id, autobuy=True).exists)()
                     if not user_data:
-                        # logger.info(f"Пропускаем обработку цены - пользователь {telegram_id} больше не в режиме автобай")
                         return
                         
                     price = float(price_str)
                     autobuy_states[telegram_id]['current_price'] = price
                     
-                    # Получаем актуальные настройки пользователя
+                    # Получаем актуальные настройки пользователя из БД при каждом обновлении цены
                     user_settings = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
                     loss_threshold = float(user_settings.loss)
                     profit_percent = float(user_settings.profit)
-                    pause_seconds_on_rise = user_settings.pause # Пауза перед покупкой на росте
+                    pause_seconds = user_settings.pause # Изменено: просто сохраняем паузу
                     symbol_base = symbol_name[:3] if len(symbol_name) > 3 else symbol_name
                     symbol_quote = symbol_name[3:] if len(symbol_name) > 3 else "QUOTE"
                     
@@ -115,7 +119,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
                     current_price_log = f"Price={price:.6f} {symbol_quote}"
                     last_buy_price_val = autobuy_states[telegram_id]['last_buy_price']
                     last_buy_price_log = f"LastBuy={last_buy_price_val:.6f} {symbol_quote}" if last_buy_price_val is not None else "LastBuy=None"
-                    threshold_log = f"LossThr={loss_threshold:.2f}%, ProfitThr={profit_percent:.2f}%, PauseOnRise={pause_seconds_on_rise}s"
+                    threshold_log = f"LossThr={loss_threshold:.2f}%, ProfitThr={profit_percent:.2f}%, PauseOnRise={pause_seconds}s"
                     is_ready_log = autobuy_states[telegram_id].get('is_ready', False)
                     waiting_opportunity_log = autobuy_states[telegram_id].get('waiting_for_opportunity', False)
                     active_orders_count = len(autobuy_states[telegram_id]['active_orders'])
@@ -145,7 +149,6 @@ async def autobuy_loop(message: Message, telegram_id: int):
                             autobuy_states[telegram_id]['waiting_for_opportunity'] = False
                             autobuy_states[telegram_id]['waiting_reported'] = False
                             logger.info(f"{log_prefix} Wait period ended. Triggering 'after_waiting_period' buy. Current Price: {price:.6f} {symbol_quote}")
-                            await message.answer(f"🔄 Возобновляем автобай для {symbol_name} после паузы. Текущая цена: {price:.6f} {symbol_quote}")
                             asyncio.create_task(process_buy(telegram_id, "after_waiting_period", message, user_settings))
                             return
                     
@@ -160,7 +163,14 @@ async def autobuy_loop(message: Message, telegram_id: int):
                     # Основная логика покупок на росте/падении, если есть цена последней покупки
                     if last_buy_price is not None:
                         price_drop_percent = ((last_buy_price - price) / last_buy_price * 100) if last_buy_price > 0 else 0
-                        if price_drop_percent >= loss_threshold:
+                        
+                        # Проверяем, не отправлялось ли недавно уведомление о падении
+                        last_drop_notification = autobuy_states[telegram_id].get('last_drop_notification', 0)
+                        
+                        if price_drop_percent >= loss_threshold and (current_time - last_drop_notification) > 10:
+                            # Обновляем время последнего уведомления
+                            autobuy_states[telegram_id]['last_drop_notification'] = current_time
+                            
                             logger.info(f"{log_prefix} Price drop condition met ({price_drop_percent:.2f}% >= {loss_threshold:.2f}%). LastBuy={last_buy_price:.6f}, Current={price:.6f} {symbol_quote}. Triggering 'price_drop' buy.")
                             await message.answer(
                                 f"⚠️ *Обнаружено падение цены для {symbol_name}*\n\n"
@@ -172,10 +182,17 @@ async def autobuy_loop(message: Message, telegram_id: int):
                             return
                         
                         price_rise_percent = ((price - last_buy_price) / last_buy_price * 100) if last_buy_price > 0 else 0
+                        
+                        # Проверяем, не отправлялось ли недавно уведомление о росте
+                        last_rise_notification = autobuy_states[telegram_id].get('last_rise_notification', 0)
+                        
                         # ДОБАВЛЕНО: Логирование рассчитанного процента роста перед проверкой условия
                         logger.info(f"{log_prefix} Calculated price_rise_percent = {price_rise_percent:.4f}% (Price: {price:.6f}, LastBuy: {last_buy_price:.6f})")
 
-                        if price_rise_percent >= profit_percent:
+                        if price_rise_percent >= profit_percent and (current_time - last_rise_notification) > 10:
+                            # Обновляем время последнего уведомления
+                            autobuy_states[telegram_id]['last_rise_notification'] = current_time
+                            
                             logger.info(f"{log_prefix} Price rise condition met ({price_rise_percent:.2f}% >= {profit_percent:.2f}%). LastBuy={last_buy_price:.6f}, Current={price:.6f} {symbol_quote}. Triggering 'price_rise' buy.")
                             await message.answer(
                                 f"⚠️ *Обнаружен рост цены для {symbol_name}*\n\n"
@@ -183,11 +200,6 @@ async def autobuy_loop(message: Message, telegram_id: int):
                                 f"Покупаем по условию роста ({profit_percent:.2f}%).",
                                 parse_mode="Markdown"
                             )
-                            if pause_seconds_on_rise > 0:
-                                logger.info(f"{log_prefix} Pausing for {pause_seconds_on_rise}s before 'price_rise' buy.")
-                                await message.answer(f"⏳ Пауза {pause_seconds_on_rise} сек. перед покупкой на росте.")
-                                await asyncio.sleep(pause_seconds_on_rise)
-                            logger.info(f"{log_prefix} Pause finished or skipped. Executing 'price_rise' buy task.")
                             asyncio.create_task(process_buy(telegram_id, "price_rise", message, user_settings))
                             return
                         
@@ -344,17 +356,11 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
     # Импортируем здесь для избежания циклических импортов
     from bot.utils.websocket_manager import websocket_manager
     
+    # Получаем актуальные настройки пользователя из БД
+    user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
+    
     # Используем Lock для предотвращения множественных покупок одновременно
     lock = asyncio.Lock()
-    
-    # Проверяем, не слишком ли быстро выполняем покупку (защита от множественных вызовов)
-    current_time = time.time()
-    last_trade_time = autobuy_states[telegram_id].get('last_trade_time', 0)
-    TRADE_COOLDOWN = 15  # Минимальный интервал между операциями в секундах
-    
-    if current_time - last_trade_time < TRADE_COOLDOWN:
-        logger.info(f"Пропускаем покупку - слишком быстро после последней ({current_time - last_trade_time}с < {TRADE_COOLDOWN}с)")
-        return
     
     if not await lock.acquire():
         logger.warning(f"Не удалось получить блокировку для покупки - {telegram_id}")
@@ -368,20 +374,31 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
             return
                 
         # Помечаем время последней операции
-        autobuy_states[telegram_id]['last_trade_time'] = current_time
+        autobuy_states[telegram_id]['last_trade_time'] = time.time()
         
         # Сбрасываем флаги ожидания
         autobuy_states[telegram_id]['waiting_for_opportunity'] = False
         autobuy_states[telegram_id]['restart_after'] = 0
         autobuy_states[telegram_id]['waiting_reported'] = False
         
-        # Получаем текущие данные
+        # Получаем текущие данные - ВСЕГДА свежие из БД
         client_session = None
+        
+        # Счетчик последовательных ошибок
+        consecutive_errors = autobuy_states[telegram_id].get('consecutive_errors', 0)
+        
         try:
+            # Отправляем сообщение о начале покупки для лучшей обратной связи
+            if reason == "after_waiting_period":
+                symbol = user.pair.replace("/", "")
+                current_price = autobuy_states[telegram_id].get('current_price', 0)
+                await message.answer(f"🔄 Возобновляем автобай для {symbol} после паузы. Текущая цена: {current_price:.6f} {symbol[3:]}")
+            
             trade_client = Trade(api_key=user.api_key, api_secret=user.api_secret)
             symbol = user.pair.replace("/", "")
             buy_amount = float(user.buy_amount)
             profit_percent = float(user.profit)
+            pause_seconds = user.pause  # Для использования после покупки
             
             # Логируем начало покупки
             logger.info(f"Начинаем покупку для {telegram_id}, причина: {reason}")
@@ -398,12 +415,25 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
             executed_qty = float(order_info.get("executedQty", 0))
             if executed_qty == 0:
                 await message.answer("❗ Ошибка при создании ордера (executedQty=0).")
+                autobuy_states[telegram_id]['consecutive_errors'] = consecutive_errors + 1
+                if autobuy_states[telegram_id]['consecutive_errors'] >= 3:
+                    user.autobuy = False
+                    await sync_to_async(user.save)()
+                    await message.answer("⛔ Автобай остановлен после 3 последовательных ошибок при создании ордеров.")
                 return
 
             spent = float(order_info["cummulativeQuoteQty"])
             if spent == 0:
                 await message.answer("❗ Ошибка при создании ордера (spent=0).")
+                autobuy_states[telegram_id]['consecutive_errors'] = consecutive_errors + 1
+                if autobuy_states[telegram_id]['consecutive_errors'] >= 3:
+                    user.autobuy = False
+                    await sync_to_async(user.save)()
+                    await message.answer("⛔ Автобай остановлен после 3 последовательных ошибок при создании ордеров.")
                 return
+            
+            # Сбрасываем счетчик ошибок при успешной покупке
+            autobuy_states[telegram_id]['consecutive_errors'] = 0
             
             real_price = spent / executed_qty if executed_qty > 0 else 0
             
@@ -413,7 +443,9 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
             # Логируем причину покупки
             logger.info(f"Buy triggered for {telegram_id} because of {reason}. New last_buy_price: {real_price}")
             
-            # Расчёт цены продажи
+            # Расчёт цены продажи - всегда используем актуальный профит из БД
+            user_settings = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
+            profit_percent = float(user_settings.profit)
             sell_price = round(real_price * (1 + profit_percent / 100), 6)
             
             # Создание лимитного ордера на продажу
@@ -455,6 +487,7 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
             active_orders.append(order_info)
             autobuy_states[telegram_id]['active_orders'] = active_orders
 
+            # Отправляем сообщение об открытии сделки
             await message.answer(
                 f"🟢 *СДЕЛКА {user_order_number} ОТКРЫТА*\n\n"
                 f"📉 Куплено по: `{real_price:.6f}` {symbol[3:]}\n"
@@ -463,10 +496,29 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
                 f"📈 Лимит на продажу: `{sell_price:.6f}` {symbol[3:]}\n",
                 parse_mode="Markdown"
             )
+            
+            # Если это была покупка на росте, устанавливаем паузу ПОСЛЕ покупки
+            if reason == "price_rise" and pause_seconds > 0:
+                # Устанавливаем время возобновления после паузы
+                autobuy_states[telegram_id]['waiting_for_opportunity'] = True
+                autobuy_states[telegram_id]['restart_after'] = time.time() + pause_seconds
+                logger.info(f"Установлена пауза {pause_seconds}с после покупки на росте для {telegram_id}")
+                
         except Exception as e:
             logger.error(f"Ошибка в процессе выполнения покупки для {telegram_id}: {e}")
             error_message = parse_mexc_error(e)
             await message.answer(f"❌ Ошибка при покупке: {error_message}")
+            
+            # Увеличиваем счетчик последовательных ошибок
+            autobuy_states[telegram_id]['consecutive_errors'] = consecutive_errors + 1
+            
+            # Если достигли 3 последовательных ошибки, останавливаем автобай
+            if autobuy_states[telegram_id]['consecutive_errors'] >= 3:
+                user.autobuy = False
+                await sync_to_async(user.save)()
+                await message.answer("⛔ Автобай остановлен после 3 последовательных ошибок. Проверьте настройки и баланс.")
+                logger.warning(f"Автобай остановлен для {telegram_id} после 3 последовательных ошибок")
+                
         finally:
             # Закрываем сессию, если она была создана
             if client_session:
