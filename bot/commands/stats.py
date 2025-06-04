@@ -106,7 +106,7 @@ async def handle_stats_callback(callback_query: CallbackQuery):
             stats_message = (
                 f"<b>{period_label}</b>\n\n"
                 f"Количество сделок: {len(deals)}\n"
-                f"Прибыль: {profit_total:.2f} {pair[3:]}\n"
+                f"Прибыль: {profit_total:.4f} {pair[3:]}\n"
                 f"Средний % профита: {avg_profit_percent:.2f}%"
             )
 

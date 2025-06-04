@@ -16,7 +16,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from bot.daily_stats import start_scheduler
-from bot.config import load_config
+from bot.config import load_config, bot_instance
 from bot.logger import logger, log_to_db
 from bot.routers import setup_routers
 from bot.middlewares.access_middleware import AccessMiddleware
@@ -24,6 +24,8 @@ from bot.middlewares.auth_middleware import AuthMiddleware
 from bot.middlewares.logging_middleware import LoggingMiddleware
 from bot.utils.set_commands import set_default_commands
 from bot.utils.log_cleaner import start_log_cleaner
+from bot.utils.websocket_manager import websocket_manager
+from bot.utils.autobuy_restart import restart_autobuy_for_users
 from django.conf import settings
 
 config = load_config()
@@ -32,10 +34,14 @@ config = load_config()
 async def main():
     try:
         logger.info("Starting bot initialization...")
+        global bot_instance
         bot = Bot(
             token=config.bot_token,
             default=DefaultBotProperties(parse_mode=ParseMode.HTML)
         )
+        # Сохраняем экземпляр бота в глобальную переменную для доступа из других модулей
+        bot_instance = bot
+        
         dp = Dispatcher(storage=MemoryStorage())
 
         # Подключаем все маршрутизаторы
@@ -58,6 +64,13 @@ async def main():
         
         # Устанавливаем команды бота
         await set_default_commands(bot)
+        
+        # Инициализируем WebSocket соединения для всех пользователей с ключами
+        logger.info("Initializing WebSocket connections for users...")
+        websocket_init_task = asyncio.create_task(websocket_manager.connect_valid_users())
+        
+        # Инициализируем общее WebSocket соединение для мониторинга цен
+        # Будем инициализировать его по требованию
         logger.info("Bot started successfully")
         
         # Добавляем запись в БД о запуске бота
@@ -66,6 +79,10 @@ async def main():
             'version': '1.0',
             'environment': os.environ.get('DJANGO_SETTINGS_MODULE', 'unknown')
         })
+        
+        # Рестарт autobuy для пользователей с активным статусом
+        logger.info("Restarting autobuy for users with active status...")
+        autobuy_restart_task = asyncio.create_task(restart_autobuy_for_users(bot))
         
         # Запускаем бота
         logger.info("Starting polling...")
@@ -93,11 +110,17 @@ async def main():
     finally:
         if 'bot' in locals():
             try:
+                # Закрываем все WebSocket соединения
+                logger.info("Closing all WebSocket connections...")
+                await websocket_manager.disconnect_all()
+                
                 # Логируем остановку бота
                 await log_to_db("Бот остановлен", level='INFO', extra_data={
                     'type': 'bot_stop',
                 })
                 await bot.close()
+                # Очищаем глобальную переменную
+                bot_instance = None
             except Exception as close_error:
                 logger.error(f"Error while closing bot: {close_error}")
 

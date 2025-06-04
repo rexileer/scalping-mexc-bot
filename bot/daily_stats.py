@@ -163,8 +163,8 @@ async def process_and_send_stats(bot: Bot):
         stats_message = (
             f"📊 <b>Статистика за {period_label}</b>\n\n"
             f"🔄 Количество сделок: {len(deals)}\n"
-            f"💰 Прибыль: {profit_total:.2f} {user.pair[3:]}\n"
-            f"📈 Средний % профита: {avg_profit_percent:.2f}%"
+            f"💰 Прибыль: {profit_total:.4f} {user.pair[3:]}\n"
+            f"📈 Средний % профита: {avg_profit_percent:.3f}%"
         )
         
         try:

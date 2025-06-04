@@ -2,9 +2,10 @@ from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.filters import Command
 import asyncio
-from bot.commands.buy import monitor_order
+# from bot.commands.buy import monitor_order
 from bot.commands.autobuy import autobuy_loop
 from bot.utils.mexc import get_user_client
+from bot.utils.websocket_manager import websocket_manager
 from bot.utils.user_autobuy_tasks import user_autobuy_tasks
 from users.models import User, Deal
 from logger import logger
@@ -34,15 +35,35 @@ async def get_user_price(message: Message):
         # Проверяем, что валидная пара получена
         if not pair:
             raise ValueError("Валютная пара не указана.")
-
-        # Получаем цену с помощью метода ticker_price (проверим корректность)
+            
+        # Сначала получаем текущую цену с помощью REST API
         ticker = client.ticker_price(pair)
+        current_price = ticker['price']
         
-        # Формируем ответ пользователю
-        response_text = f"Цена {pair}: {ticker['price']}"
+        # Формируем начальный ответ
+        response_text = f"Цена {pair}: {current_price}"
+        sent_message = await message.answer(response_text)
         
-        # Отправляем цену пользователю
-        await message.answer(response_text)
+        # Создаём или подключаемся к WebSocket для рыночных данных
+        if not websocket_manager.market_connection:
+            await websocket_manager.connect_market_data([pair])
+        elif pair not in websocket_manager.market_subscriptions:
+            await websocket_manager.subscribe_market_data([pair])
+        
+        # Функция для обновления цены в сообщении
+        async def update_price_message(symbol, price):
+            nonlocal sent_message
+            await sent_message.edit_text(f"Цена {symbol}: {price} (обновлено)")
+        
+        # Регистрируем callback для обновления цены в реальном времени
+        await websocket_manager.register_price_callback(pair, update_price_message)
+        
+        # Через 10 секунд удалим callback (чтобы не накапливать их)
+        await asyncio.sleep(10)
+        
+        if pair in websocket_manager.price_callbacks:
+            if update_price_message in websocket_manager.price_callbacks[pair]:
+                websocket_manager.price_callbacks[pair].remove(update_price_message)
     
     except ValueError as e:
         # Обрабатываем ошибки, если ошибка в API или данных
@@ -104,8 +125,8 @@ async def balance_handler(message: Message):
 
             balances_message += (
                 f"\n<b>{asset}</b>\n"
-                f"Доступно: {format(free, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}\n"
-                f"Заморожено: {format(locked, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
+                f"Доступно: {format(free, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}\n"
+                f"Заморожено: {format(locked, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
             )
 
         orders = client.open_orders(symbol=pair)
@@ -119,7 +140,7 @@ async def balance_handler(message: Message):
         orders_message = (
             f"\n\n📄 <b>Ордера</b>\n"
             f"Количество: {format(total_order_amount, ',.0f').replace(',', ' ')}\n"
-            f"Сумма исполнения: {format(total_order_value, ',.2f').replace(',', 'X').replace('.', ',').replace('X', '.')} {quote_asset}\n"
+            f"Сумма исполнения: {format(total_order_value, ',.4f').replace(',', 'X').replace('.', ',').replace('X', '.')} {quote_asset}\n"
             f"Средняя цена исполнения: {format(avg_price, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.')} {quote_asset}"
         )
 
@@ -189,7 +210,7 @@ async def buy_handler(message: Message):
             await message.answer(response_text)
             return
 
-        spent = float(order_info["cummulativeQuoteQty"])  # 0.999371
+        spent = float(order_info["cummulativeQuoteQty"])
         if spent == 0:
             response_text = "❗ Ошибка при создании ордера (spent=0)."
             success = False
@@ -248,8 +269,8 @@ async def buy_handler(message: Message):
 
         logger.info(f"BUY + SELL for {user.telegram_id}: {executed_qty} {symbol} @ {real_price} -> {sell_price}")
 
-        # 8. Запускаем фоновый мониторинг ордера
-        asyncio.create_task(monitor_order(message, sell_order_id, user_order_number))
+        # 8. Не запускаем мониторинг - WebSocket будет отслеживать изменения
+        # Статус будет обновляться автоматически через WebSocket
 
     except Exception as e:
         logger.exception("Ошибка при выполнении /buy")

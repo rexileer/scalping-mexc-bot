@@ -211,5 +211,16 @@ def save_user_parameter(user_id: int, param: str, value: float):
         setattr(user, param, value)
         user.save()
         logger.info(f"[OK] Saved {param}={value} for user {user_id}")
+        
+        # Если пользователь в режиме автобая, обновляем параметры в реальном времени
+        if hasattr(user, 'autobuy') and user.autobuy:
+            # Импортируем autobuy_states здесь, чтобы избежать циклических импортов
+            from bot.commands.autobuy import autobuy_states
+            if user_id in autobuy_states:
+                logger.info(f"[OK] Updated {param} in autobuy_states for user {user_id}")
+                # В зависимости от параметра, можем выполнить дополнительные действия
+                # Например, сбросить некоторые флаги или пересчитать величины
     except User.DoesNotExist:
         logger.error(f"❌ Cannot save {param} — user {user_id} not found")
+    except Exception as e:
+        logger.error(f"❌ Error updating {param} for user {user_id}: {e}")
