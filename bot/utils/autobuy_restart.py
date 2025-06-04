@@ -9,21 +9,26 @@ from bot.config import bot_instance
 
 # Create a fake message class to use when restarting autobuy
 class FakeMessage:
-    def __init__(self, chat_id):
+    def __init__(self, chat_id, bot=None):
         self.chat_id = chat_id
+        self.bot = bot
     
     async def answer(self, text, parse_mode=None):
         """Send a message to the user"""
-        if bot_instance:
-            await bot_instance.send_message(
+        # Use the bot instance provided at initialization if available
+        # Otherwise fall back to the global bot_instance
+        bot = self.bot or bot_instance
+        
+        if bot:
+            await bot.send_message(
                 chat_id=self.chat_id,
                 text=text,
                 parse_mode=parse_mode
             )
         else:
-            logger.error(f"Cannot send message to {self.chat_id}: bot_instance is None")
+            logger.error(f"Cannot send message to {self.chat_id}: bot instance is None")
 
-async def restart_autobuy_for_users():
+async def restart_autobuy_for_users(bot=None):
     """Restart autobuy for all users who have it enabled in the database"""
     try:
         # Import User model here to avoid circular imports
@@ -49,8 +54,8 @@ async def restart_autobuy_for_users():
                 
             logger.info(f"Restarting autobuy for user {user.telegram_id}")
             
-            # Create a fake message object
-            fake_message = FakeMessage(chat_id=user.telegram_id)
+            # Create a fake message object with the bot instance passed
+            fake_message = FakeMessage(chat_id=user.telegram_id, bot=bot)
             
             # Start autobuy task
             task = asyncio.create_task(

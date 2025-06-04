@@ -82,7 +82,7 @@ async def main():
         
         # Рестарт autobuy для пользователей с активным статусом
         logger.info("Restarting autobuy for users with active status...")
-        autobuy_restart_task = asyncio.create_task(restart_autobuy_for_users())
+        autobuy_restart_task = asyncio.create_task(restart_autobuy_for_users(bot))
         
         # Запускаем бота
         logger.info("Starting polling...")
