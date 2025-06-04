@@ -393,7 +393,7 @@ async def status_handler(message: Message):
 
         header = "🔁 <b>Автобай запущен.</b>" if user.autobuy else "⚠️ <b>Автобай не запущен.</b>"
 
-        # Получаем активные ордера
+        # Получаем активные ордера напрямую из базы без проверки через API
         deals_qs = Deal.objects.filter(
             user=user,
             status__in=["SELL_ORDER_PLACED", "PARTIALLY_FILLED", "NEW"]
@@ -409,15 +409,7 @@ async def status_handler(message: Message):
         if active_deals:
             for deal in reversed(active_deals):  # От старых к новым
                 try:
-                    real_status = await sync_to_async(get_actual_order_status)(
-                        user, deal.symbol, deal.order_id
-                    )
-                    deal.status = real_status
-                    deal.save()
-
-                    if real_status not in ["NEW", "PARTIALLY_FILLED"]:
-                        continue
-
+                    # Используем статус из базы данных, без запросов к API
                     date_str = localtime(deal.created_at).strftime("%d %B %Y %H:%M:%S")
                     autobuy_note = " (AutoBuy)" if deal.is_autobuy else ""
                     symbol = deal.symbol
