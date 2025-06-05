@@ -194,12 +194,12 @@ async def autobuy_loop(message: Message, telegram_id: int):
                             autobuy_states[telegram_id]['last_rise_notification'] = current_time
                             
                             logger.info(f"{log_prefix} Price rise condition met ({price_rise_percent:.2f}% >= {profit_percent:.2f}%). LastBuy={last_buy_price:.6f}, Current={price:.6f} {symbol_quote}. Triggering 'price_rise' buy.")
-                            await message.answer(
-                                f"⚠️ *Обнаружен рост цены для {symbol_name}*\n\n"
-                                f"🟢 Цена (`{price:.6f} {symbol_quote}`) выросла на `{price_rise_percent:.2f}%` от покупки по `{last_buy_price:.6f} {symbol_quote}`. \n"
-                                f"Покупаем по условию роста ({profit_percent:.2f}%).",
-                                parse_mode="Markdown"
-                            )
+                            # await message.answer(
+                            #     f"⚠️ *Обнаружен рост цены для {symbol_name}*\n\n"
+                            #     f"🟢 Цена (`{price:.6f} {symbol_quote}`) выросла на `{price_rise_percent:.2f}%` от покупки по `{last_buy_price:.6f} {symbol_quote}`. \n"
+                            #     f"Покупаем по условию роста ({profit_percent:.2f}%).",
+                            #     parse_mode="Markdown"
+                            # )
                             asyncio.create_task(process_buy(telegram_id, "price_rise", message, user_settings))
                             return
                         
@@ -269,7 +269,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
                     
                     # Запускаем новую покупку, если нет активных ордеров
                     if not autobuy_states[telegram_id]['active_orders']:
-                        await message.answer(f"🔄 Возобновляем автобай после паузы (основной цикл). Текущая цена: {autobuy_states[telegram_id]['current_price']}")
+                        # await message.answer(f"🔄 Возобновляем автобай после паузы (основной цикл). Текущая цена: {autobuy_states[telegram_id]['current_price']}")
                         await process_buy(telegram_id, "after_waiting_period_main_loop", message, user)
                 
                 # Просто ждем, реальная работа происходит в колбэках
@@ -392,7 +392,7 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
             if reason == "after_waiting_period":
                 symbol = user.pair.replace("/", "")
                 current_price = autobuy_states[telegram_id].get('current_price', 0)
-                await message.answer(f"🔄 Возобновляем автобай для {symbol} после паузы. Текущая цена: {current_price:.6f} {symbol[3:]}")
+                # await message.answer(f"🔄 Возобновляем автобай для {symbol} после паузы. Текущая цена: {current_price:.6f} {symbol[3:]}")
             
             trade_client = Trade(api_key=user.api_key, api_secret=user.api_secret)
             symbol = user.pair.replace("/", "")
