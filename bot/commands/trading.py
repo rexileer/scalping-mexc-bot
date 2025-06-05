@@ -612,7 +612,7 @@ async def show_status_page(message, user_id, page=1, check_status=True):
             ).order_by("-created_at"))
         
         # Расчет параметров пагинации
-        orders_per_page = 2  # Максимальное количество ордеров на странице
+        orders_per_page = 10  # Максимальное количество ордеров на странице
         total_orders = len(active_deals)
         total_pages = math.ceil(total_orders / orders_per_page) if total_orders > 0 else 1
         
