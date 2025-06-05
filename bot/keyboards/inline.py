@@ -60,3 +60,46 @@ def build_parameters_keyboard(user_params):
             [InlineKeyboardButton(text=f"Изменить сумму покупки (Текущая: {user_params.buy_amount})", callback_data="change_buy_amount")],
         ]
     )
+
+# Клавиатура пагинации для функции status
+def get_pagination_keyboard(current_page, total_pages, user_id):
+    """
+    Создает клавиатуру пагинации для просмотра ордеров
+    
+    Args:
+        current_page (int): Текущая страница
+        total_pages (int): Всего страниц
+        user_id (int): ID пользователя (для идентификации в callback_data)
+        
+    Returns:
+        InlineKeyboardMarkup: Клавиатура с кнопками "<", "текущая/всего", ">"
+    """
+    buttons = []
+    
+    # Создаем ряд с тремя кнопками
+    row = []
+    
+    # Кнопка "назад" (неактивна на первой странице)
+    prev_button = InlineKeyboardButton(
+        text="◀️",
+        callback_data=f"status_page:{user_id}:{current_page-1}" if current_page > 1 else "dummy_callback"
+    )
+    row.append(prev_button)
+    
+    # Кнопка с информацией о текущей странице
+    page_info = InlineKeyboardButton(
+        text=f"{current_page}/{total_pages}",
+        callback_data="dummy_callback"  # Эта кнопка не должна вызывать действие
+    )
+    row.append(page_info)
+    
+    # Кнопка "вперед" (неактивна на последней странице)
+    next_button = InlineKeyboardButton(
+        text="▶️",
+        callback_data=f"status_page:{user_id}:{current_page+1}" if current_page < total_pages else "dummy_callback"
+    )
+    row.append(next_button)
+    
+    buttons.append(row)
+    
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
