@@ -7,6 +7,8 @@ from bot.commands.subscription import router as subscription_router  # Кома�
 from bot.commands.parameters import router as parameters_router  # Команда /parameters
 from bot.commands.trading import router as trading_router # Команды /price, /buy, /auto_buy, /balance, /status, /stats
 from bot.commands.stats import router as stats_router  # stats
+from bot.commands.bookticker_demo import router as bookticker_demo_router  # bookticker_demo
+from bot.commands.websocket_debug import router as websocket_debug_router  # debug commands
 
 def setup_routers() -> Router:
     router = Router()
@@ -19,4 +21,6 @@ def setup_routers() -> Router:
     router.include_router(trading_router)
     router.include_router(stats_router)
     
+    router.include_router(bookticker_demo_router)
+    router.include_router(websocket_debug_router)
     return router
