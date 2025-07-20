@@ -108,6 +108,11 @@ async def test_trigger_logic(message: Message):
         state['trigger_price'] = mid_price
         state['trigger_time'] = current_time
         state['is_rise_trigger'] = True
+        state['is_trigger_activated'] = False
+        state['trigger_activated_time'] = 0
+        state['pause_trend_prices'] = []
+        state['trend_only_rise'] = True
+        state['last_pause_price'] = None
         
         test_info = []
         test_info.append("🧪 *Trigger Test Results*\n")
