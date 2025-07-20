@@ -103,7 +103,7 @@ def get_user_deals(user, start_date, end_date):
     """Get all completed deals for a user within the date range"""
     return list(Deal.objects.filter(
         user=user,
-        created_at__range=(start_date, end_date),
+        updated_at__range=(start_date, end_date),
         status="FILLED"
     ))
 
