@@ -135,8 +135,8 @@ def get_user_and_deals(telegram_id, start_date, end_date):
     user = User.objects.get(telegram_id=telegram_id)
     deals = Deal.objects.filter(
         user=user,
-        created_at__range=[start_date, end_date],
+        updated_at__range=[start_date, end_date],
         sell_price__isnull=False,
         status="FILLED"
-    ).order_by('created_at')
+    ).order_by('updated_at')
     return user, deals
