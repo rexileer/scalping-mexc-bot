@@ -216,24 +216,29 @@ class MexcWebSocketManager:
 
                 # Handle deals (price updates)
                 elif 'deals' in channel:
-                    # Deals message format: {"c":"spot@public.deals.v3.api@BTCUSDT","d":{"p":"66000.00","v":"0.1","t":1701880076719,"T":"BUY"},"s":"BTCUSDT"}
-                    price_data = message.get('d', {}).get('p')
-                    if price_data:
-                        logger.info(f"[MarketWS] Price update for {symbol}: {price_data}")
+                    # Deals message format: {"c":"spot@public.deals.v3.api@KASUSDC","d":{"deals":[{"p":"0.098348","v":"324.94","S":1,"t":1753015604473}],"e":"spot@public.deals.v3.api"},"s":"KASUSDC"}
+                    deals_data = message.get('d', {}).get('deals', [])
+                    if deals_data and len(deals_data) > 0:
+                        # Берем цену из первой сделки в массиве
+                        price_data = deals_data[0].get('p')
+                        if price_data:
+                            logger.debug(f"[MarketWS] Price update for {symbol}: {price_data}")
 
-                        # Call any registered price callbacks
-                        if symbol in self.price_callbacks:
-                            logger.debug(f"[MarketWS] Found {len(self.price_callbacks[symbol])} callbacks for {symbol}")
-                            for callback in self.price_callbacks[symbol]:
-                                try:
-                                    logger.debug(f"[MarketWS] Calling callback {callback.__name__} for {symbol} with price {price_data}")
-                                    await callback(symbol, price_data)
-                                except Exception as e:
-                                    logger.error(f"[MarketWS] Error in price callback for {symbol} ({callback.__name__}): {e}", exc_info=True)
+                            # Call any registered price callbacks
+                            if symbol in self.price_callbacks:
+                                logger.debug(f"[MarketWS] Found {len(self.price_callbacks[symbol])} callbacks for {symbol}")
+                                for callback in self.price_callbacks[symbol]:
+                                    try:
+                                        logger.debug(f"[MarketWS] Calling callback {callback.__name__} for {symbol} with price {price_data}")
+                                        await callback(symbol, price_data)
+                                    except Exception as e:
+                                        logger.error(f"[MarketWS] Error in price callback for {symbol} ({callback.__name__}): {e}", exc_info=True)
+                            else:
+                                logger.debug(f"[MarketWS] No callbacks registered for symbol {symbol}")
                         else:
-                            logger.debug(f"[MarketWS] No callbacks registered for symbol {symbol}")
+                            logger.warning(f"[MarketWS] Could not extract price from deals array for symbol {symbol}: {message}")
                     else:
-                        logger.warning(f"[MarketWS] Could not extract price from deals message for symbol {symbol}: {message}")
+                        logger.warning(f"[MarketWS] Could not extract deals array for symbol {symbol}: {message}")
 
             # Handle subscription responses and other service messages
             if message.get("method") == "SUBSCRIPTION" and message.get("code") == 0:
@@ -282,7 +287,7 @@ class MexcWebSocketManager:
                 # Если направление изменилось, обновляем время последнего изменения
                 if new_is_rise != self.is_rise[symbol]:
                     self.last_price_change[symbol] = current_time
-                    logger.info(f"[PriceDirection] {symbol}: Direction changed from {'rise' if self.is_rise[symbol] else 'fall'} to {'rise' if new_is_rise else 'fall'}. Price: {previous_price:.6f} -> {current_price:.6f}")
+                    logger.debug(f"[PriceDirection] {symbol}: Direction changed from {'rise' if self.is_rise[symbol] else 'fall'} to {'rise' if new_is_rise else 'fall'}. Price: {previous_price:.6f} -> {current_price:.6f}")
                 
                 self.is_rise[symbol] = new_is_rise
                 
@@ -633,7 +638,7 @@ class MexcWebSocketManager:
 
                 if msg:
                     if msg.type == aiohttp.WSMsgType.TEXT:
-                        logger.info(f"[MarketWS] Received TEXT message: {msg.data[:200]}...") # Увеличиваем логирование
+                        logger.debug(f"[MarketWS] Received TEXT message: {msg.data[:200]}...") # Уменьшаем логирование
                         try:
                             data = json.loads(msg.data)
                         except json.JSONDecodeError as e:

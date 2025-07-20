@@ -125,7 +125,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
                     autobuy_states[telegram_id]['current_price'] = mid_price
 
                     # Логируем обновление bookTicker
-                    logger.info(f"BookTicker update for {telegram_id} ({symbol_name}): bid={bid_price}, ask={ask_price}, mid={mid_price:.6f}, is_rise={is_rise}")
+                    logger.debug(f"BookTicker update for {telegram_id} ({symbol_name}): bid={bid_price}, ask={ask_price}, mid={mid_price:.6f}, is_rise={is_rise}")
 
                     # Проверяем триггеры для покупок на росте
                     await check_rise_triggers(telegram_id, symbol_name, float(bid_price), float(ask_price), is_rise, current_time, user_settings)
@@ -140,18 +140,34 @@ async def autobuy_loop(message: Message, telegram_id: int):
                         if price_drop_percent >= loss_threshold and (current_time - last_drop_notification) > 10:
                             autobuy_states[telegram_id]['last_drop_notification'] = current_time
                             logger.info(f"Price drop condition met for {telegram_id}: ask={ask_price:.6f}, last_buy={last_buy_price:.6f}, drop={price_drop_percent:.2f}% >= {loss_threshold:.2f}%")
-                            await message.answer(
-                                f"⚠️ *Обнаружено падение цены для {symbol_name}*\n\n"
-                                f"🔻 Ask цена (`{ask_price:.6f}`) снизилась на `{price_drop_percent:.2f}%` от покупки по `{last_buy_price:.6f}`. \n"
-                                f"Покупаем по условию падения ({loss_threshold:.2f}%).",
-                                parse_mode="Markdown"
-                            )
-                            asyncio.create_task(process_buy(telegram_id, "price_drop", message, user_settings))
+                            
+                            # Send notification using bot instance directly
+                            from bot.config import bot_instance
+                            try:
+                                await bot_instance.send_message(
+                                    telegram_id,
+                                    f"🔻 Обнаружено падение цены для {symbol_name}\n\n"
+                                    f"🔻 Цена ({ask_price:.6f} USDC) снизилась на {price_drop_percent:.2f}% от покупки по {last_buy_price:.6f} USDC. \n"
+                                    f"Покупаем по условию падения ({loss_threshold:.2f}%)."
+                                )
+                                logger.info(f"Drop notification sent to {telegram_id}")
+                            except Exception as e:
+                                logger.error(f"Failed to send drop notification to {telegram_id}: {e}")
+                            
+                            # Create a fake message object for process_buy
+                            from bot.utils.autobuy_restart import FakeMessage
+                            from bot.config import bot_instance
+                            fake_message = FakeMessage(telegram_id, bot_instance)
+                            logger.info(f"Starting process_buy for {telegram_id} due to price drop")
+                            asyncio.create_task(process_buy(telegram_id, "price_drop", fake_message, user_settings))
 
                 except Exception as e:
                     logger.error(f"Ошибка в обработчике bookTicker autobuy для {telegram_id} ({symbol_name}): {e}", exc_info=True)
 
-
+            # Регистрируем колбэк с WebSocket менеджером
+            await websocket_manager.register_bookticker_callback(symbol, update_bookticker_for_autobuy)
+            autobuy_states[telegram_id]['bookticker_callbacks'].append(update_bookticker_for_autobuy)
+            logger.info(f"Registered bookTicker callback for {telegram_id} on {symbol}")
 
             # Получаем текущую цену через REST API для начала
             ticker_data = trade_client.ticker_price(symbol)
@@ -227,6 +243,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
                 # Импортируем websocket_manager внутри блока
                 from bot.utils.websocket_manager import websocket_manager
 
+                # Clean up price callbacks
                 for callback in autobuy_states[telegram_id]['price_callbacks']:
                     try:
                         user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
@@ -235,7 +252,16 @@ async def autobuy_loop(message: Message, telegram_id: int):
                             if callback in websocket_manager.price_callbacks[symbol_to_unregister]:
                                 websocket_manager.price_callbacks[symbol_to_unregister].remove(callback)
                     except Exception as e:
-                        logger.error(f"Ошибка при очистке колбэков для {telegram_id}: {e}")
+                        logger.error(f"Ошибка при очистке price колбэков для {telegram_id}: {e}")
+                
+                # Clean up bookTicker callbacks
+                for callback in autobuy_states[telegram_id]['bookticker_callbacks']:
+                    try:
+                        user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
+                        symbol_to_unregister = user.pair.replace("/", "")
+                        await websocket_manager.unregister_bookticker_callback(symbol_to_unregister, callback)
+                    except Exception as e:
+                        logger.error(f"Ошибка при очистке bookTicker колбэков для {telegram_id}: {e}")
 
             # Если есть сессия, закрываем её
             if session:
@@ -258,12 +284,24 @@ async def autobuy_loop(message: Message, telegram_id: int):
                 if task:
                     task.cancel()
                     del user_autobuy_tasks[telegram_id]
+                
+                # Send additional notification about autobuy stop
+                try:
+                    from bot.config import bot_instance
+                    await bot_instance.send_message(
+                        telegram_id,
+                        f"⛔ Автобай остановлен после {MAX_FAILS} последовательных ошибок.\n"
+                        f"Проверьте настройки и баланс."
+                    )
+                except Exception as notify_error:
+                    logger.error(f"Failed to send autobuy stop notification to {telegram_id}: {notify_error}")
 
                 # Удаляем колбэки и состояние
                 if telegram_id in autobuy_states:
                     # Импортируем websocket_manager внутри блока
                     from bot.utils.websocket_manager import websocket_manager
 
+                    # Clean up price callbacks
                     for callback in autobuy_states[telegram_id]['price_callbacks']:
                         try:
                             symbol_to_unregister = user.pair.replace("/", "")
@@ -271,7 +309,16 @@ async def autobuy_loop(message: Message, telegram_id: int):
                                 if callback in websocket_manager.price_callbacks[symbol_to_unregister]:
                                     websocket_manager.price_callbacks[symbol_to_unregister].remove(callback)
                         except Exception as cleanup_error:
-                            logger.error(f"Ошибка при очистке колбэков: {cleanup_error}")
+                            logger.error(f"Ошибка при очистке price колбэков: {cleanup_error}")
+                    
+                    # Clean up bookTicker callbacks
+                    for callback in autobuy_states[telegram_id]['bookticker_callbacks']:
+                        try:
+                            symbol_to_unregister = user.pair.replace("/", "")
+                            await websocket_manager.unregister_bookticker_callback(symbol_to_unregister, callback)
+                        except Exception as cleanup_error:
+                            logger.error(f"Ошибка при очистке bookTicker колбэков: {cleanup_error}")
+                    
                     del autobuy_states[telegram_id]
 
                 # Если есть сессия, закрываем её
@@ -292,12 +339,25 @@ async def autobuy_loop(message: Message, telegram_id: int):
         if task:
             task.cancel()
             del user_autobuy_tasks[telegram_id]
+        
+        # Send notification about autobuy failure
+        try:
+            from bot.config import bot_instance
+            await bot_instance.send_message(
+                telegram_id,
+                f"⛔ Автобай не удалось запустить после {MAX_FAILS} попыток.\n"
+                f"Проверьте настройки и попробуйте снова."
+            )
+        except Exception as notify_error:
+            logger.error(f"Failed to send autobuy failure notification to {telegram_id}: {notify_error}")
 
 
 async def process_buy(telegram_id: int, reason: str, message: Message, user: User):
     """Обработка покупки с защитой от одновременных операций"""
     # Импортируем здесь для избежания циклических импортов
     from bot.utils.websocket_manager import websocket_manager
+
+    logger.info(f"process_buy called for {telegram_id} with reason: {reason}")
 
     # Получаем актуальные настройки пользователя из БД
     user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
@@ -431,14 +491,31 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
             autobuy_states[telegram_id]['active_orders'] = active_orders
 
             # Отправляем сообщение об открытии сделки
-            await message.answer(
-                f"🟢 *СДЕЛКА {user_order_number} ОТКРЫТА*\n\n"
-                f"📉 Куплено по: `{real_price:.6f}` {symbol[3:]}\n"
-                f"📦 Кол-во: `{executed_qty:.6f}` {symbol[:3]}\n"
-                f"💸 Потрачено: `{spent:.2f}` {symbol[3:]}\n\n"
-                f"📈 Лимит на продажу: `{sell_price:.6f}` {symbol[3:]}\n",
-                parse_mode="Markdown"
-            )
+            try:
+                from bot.config import bot_instance
+                await bot_instance.send_message(
+                    telegram_id,
+                    f"🟢 *СДЕЛКА {user_order_number} ОТКРЫТА*\n\n"
+                    f"📉 Куплено по: `{real_price:.6f}` {symbol[3:]}\n"
+                    f"📦 Кол-во: `{executed_qty:.6f}` {symbol[:3]}\n"
+                    f"💸 Потрачено: `{spent:.2f}` {symbol[3:]}\n\n"
+                    f"📈 Лимит на продажу: `{sell_price:.6f}` {symbol[3:]}\n",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logger.error(f"Failed to send buy notification to {telegram_id}: {e}")
+                # Fallback to message.answer if bot_instance fails
+                try:
+                    await message.answer(
+                        f"🟢 *СДЕЛКА {user_order_number} ОТКРЫТА*\n\n"
+                        f"📉 Куплено по: `{real_price:.6f}` {symbol[3:]}\n"
+                        f"📦 Кол-во: `{executed_qty:.6f}` {symbol[:3]}\n"
+                        f"💸 Потрачено: `{spent:.2f}` {symbol[3:]}\n\n"
+                        f"📈 Лимит на продажу: `{sell_price:.6f}` {symbol[3:]}\n",
+                        parse_mode="Markdown"
+                    )
+                except Exception as fallback_error:
+                    logger.error(f"Failed to send buy notification via fallback to {telegram_id}: {fallback_error}")
 
             # Устанавливаем триггер для покупок на росте после любой покупки или продажи
             if reason in ["price_rise", "price_drop", "new_buy_cycle", "initial_purchase", "after_waiting_period", "rise_trigger"]:
@@ -524,8 +601,24 @@ async def check_rise_triggers(telegram_id: int, symbol: str, bid_price: float, a
                 if ask_price_float > trigger_price:
                     logger.info(f"Rise trigger activated for {telegram_id}: ask price {ask_price_float:.6f} > trigger {trigger_price:.6f}")
                     
+                    # Send notification about rise trigger
+                    from bot.config import bot_instance
+                    try:
+                        await bot_instance.send_message(
+                            telegram_id,
+                            f"⏫ Обнаружен рост цены для {symbol}\n\n"
+                            f"⬆️ Цена ({ask_price_float:.6f} USDC) выросла от триггера {trigger_price:.6f} USDC. \n"
+                            f"Покупаем по условию роста (триггер)."
+                        )
+                        logger.info(f"Rise trigger notification sent to {telegram_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to send rise trigger notification to {telegram_id}: {e}")
+                    
                     # Совершаем покупку
-                    asyncio.create_task(process_buy(telegram_id, "rise_trigger", None, user_settings))
+                    from bot.utils.autobuy_restart import FakeMessage
+                    from bot.config import bot_instance
+                    fake_message = FakeMessage(telegram_id, bot_instance)
+                    asyncio.create_task(process_buy(telegram_id, "rise_trigger", fake_message, user_settings))
                     
                     # Устанавливаем новый триггер по ask цене
                     state['trigger_price'] = ask_price_float
@@ -578,6 +671,24 @@ async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
             autobuy_states[user_id]['active_orders'] = active_orders
             logger.info(f"[AutobuyOrderUpdate] User {user_id}: active_orders after removal: {autobuy_states[user_id]['active_orders']}")
 
+            # Устанавливаем триггер для покупок на росте после КАЖДОЙ продажи
+            try:
+                from bot.utils.websocket_manager import websocket_manager
+                bookticker_data = websocket_manager.get_current_bookticker(symbol)
+                if bookticker_data:
+                    ask_price = float(bookticker_data['ask_price'])  # Используем ask цену
+                    current_time = time.time()
+                    
+                    autobuy_states[user_id]['trigger_price'] = ask_price
+                    autobuy_states[user_id]['trigger_time'] = current_time
+                    autobuy_states[user_id]['is_rise_trigger'] = True
+                    
+                    logger.info(f"[AutobuyOrderUpdate] User {user_id}: Rise trigger set at ask price {ask_price:.6f} after order {order_id} filled")
+                else:
+                    logger.warning(f"[AutobuyOrderUpdate] User {user_id}: Could not set rise trigger - no bookTicker data")
+            except Exception as e:
+                logger.error(f"[AutobuyOrderUpdate] User {user_id}: Error setting rise trigger: {e}")
+
             # Если не осталось активных ордеров, устанавливаем паузу перед следующей покупкой
             if not active_orders:
                 logger.info(f"[AutobuyOrderUpdate] User {user_id}: No active orders remaining.")
@@ -591,21 +702,6 @@ async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
                     autobuy_states[user_id]['waiting_for_opportunity'] = True
                     autobuy_states[user_id]['restart_after'] = time.time() + pause_seconds
                     autobuy_states[user_id]['waiting_reported'] = False
-
-                    # Устанавливаем триггер для покупок на росте после продажи
-                    from bot.utils.websocket_manager import websocket_manager
-                    bookticker_data = websocket_manager.get_current_bookticker(symbol)
-                    if bookticker_data:
-                        ask_price = float(bookticker_data['ask_price'])  # Используем ask цену
-                        current_time = time.time()
-                        
-                        autobuy_states[user_id]['trigger_price'] = ask_price
-                        autobuy_states[user_id]['trigger_time'] = current_time
-                        autobuy_states[user_id]['is_rise_trigger'] = True
-                        
-                        logger.info(f"[AutobuyOrderUpdate] User {user_id}: Rise trigger set at ask price {ask_price:.6f} after order filled")
-                    else:
-                        logger.warning(f"[AutobuyOrderUpdate] User {user_id}: Could not set rise trigger - no bookTicker data")
 
                     logger.info(f"[AutobuyOrderUpdate] User {user_id}: Reset last_buy_price to None. waiting_for_opportunity=True. Next buy possible after {pause_seconds}s (at {autobuy_states[user_id]['restart_after']}).")
                 except Exception as e:
