@@ -30,6 +30,13 @@ class MexcWebSocketManager:
         self.reconnect_delay = 1  # Initial reconnect delay in seconds
         self.is_shutting_down = False
         self.reconnecting_users = set()  # Set to track users currently in reconnection process
+        
+        # Новые поля для отслеживания роста/падения цены
+        self.price_history: Dict[str, List[float]] = {}  # {symbol: [prices]}
+        self.price_timestamps: Dict[str, List[float]] = {}  # {symbol: [timestamps]}
+        self.is_rise: Dict[str, bool] = {}  # {symbol: True/False} - текущее направление цены
+        self.last_price_change: Dict[str, float] = {}  # {symbol: timestamp} - время последнего изменения направления
+        self.max_history_size = 100  # Максимальное количество цен в истории для каждого символа
 
     async def get_listen_key(self, api_key: str, api_secret: str) -> Tuple[bool, str, Optional[str]]:
         """
@@ -164,20 +171,19 @@ class MexcWebSocketManager:
             channel = message.get('c', '')
             symbol = message.get('s')
 
-            logger.info(f"[MarketWS] Processing message - Channel: '{channel}', Symbol: '{symbol}', Message: {message}")
+            # Убираем дублирование логов - не логируем каждое сообщение
 
             if isinstance(message, dict) and symbol:
-                logger.info(f"[MarketWS] Valid message with symbol: {symbol}")
-
                 # Handle bookTicker updates
                 if 'bookTicker' in channel:
-                    # BookTicker message format: {"c":"spot@public.bookTicker.v3.api@BTCUSDT","d":{"bidPrice":"66000.00","askPrice":"66001.00","bidQty":"1.5","askQty":"2.0"},"s":"BTCUSDT","t":1701880076719}
+                    # BookTicker message format: {"c":"spot@public.bookTicker.v3.api@KASUSDC","d":{"A":"14.53","B":"103.81","a":"0.096287","b":"0.095972"},"s":"KASUSDC","t":1753001356734}
                     bookticker_data = message.get('d', {})
                     if bookticker_data:
-                        bid_price = bookticker_data.get('bidPrice')
-                        ask_price = bookticker_data.get('askPrice')
-                        bid_qty = bookticker_data.get('bidQty')
-                        ask_qty = bookticker_data.get('askQty')
+                        # Используем правильные ключи из логов: a=ask, b=bid, A=ask_qty, B=bid_qty
+                        bid_price = bookticker_data.get('b')  # bid price
+                        ask_price = bookticker_data.get('a')  # ask price
+                        bid_qty = bookticker_data.get('B')    # bid quantity
+                        ask_qty = bookticker_data.get('A')    # ask quantity
 
                         if bid_price and ask_price:
                             # Store current bookTicker data
@@ -189,7 +195,7 @@ class MexcWebSocketManager:
                                 'timestamp': message.get('t', int(time.time() * 1000))
                             }
 
-                            logger.info(f"[MarketWS] BookTicker update for {symbol}: bid={bid_price}, ask={ask_price}")
+                            logger.debug(f"[MarketWS] BookTicker update for {symbol}: bid={bid_price}, ask={ask_price}")
 
                             # Call bookTicker-specific handlers
                             await handle_bookticker_update(symbol, bid_price, ask_price, bid_qty, ask_qty)
@@ -205,20 +211,13 @@ class MexcWebSocketManager:
                             else:
                                 logger.debug(f"[MarketWS] No bookTicker callbacks registered for symbol {symbol}")
 
-                # Handle deals/trades updates
+                            # Обновляем логику определения роста/падения цены
+                            await self._update_price_direction(symbol, float(bid_price), float(ask_price))
+
+                # Handle deals (price updates)
                 elif 'deals' in channel:
-                    price_data = None
-
-                    if 'd' in message and 'deals' in message['d'] and message['d']['deals']:
-                        # Это массив сделок, берем цену из последней сделки в массиве
-                        latest_deal = message['d']['deals'][-1]
-                        price_data = latest_deal.get('p')
-                        logger.debug(f"[MarketWS] Extracted price {price_data} for {symbol} from deals array: {latest_deal}")
-                    elif 'p' in message:
-                        # Это одиночная сделка с ценой в корне (старый или альтернативный формат)
-                        price_data = message.get('p')
-                        logger.debug(f"[MarketWS] Extracted price {price_data} for {symbol} from root price field.")
-
+                    # Deals message format: {"c":"spot@public.deals.v3.api@BTCUSDT","d":{"p":"66000.00","v":"0.1","t":1701880076719,"T":"BUY"},"s":"BTCUSDT"}
+                    price_data = message.get('d', {}).get('p')
                     if price_data:
                         logger.info(f"[MarketWS] Price update for {symbol}: {price_data}")
 
@@ -246,6 +245,81 @@ class MexcWebSocketManager:
 
         except Exception as e:
             logger.error(f"Error handling market message: {e}")
+
+    async def _update_price_direction(self, symbol: str, bid_price: float, ask_price: float):
+        """
+        Обновляет направление цены (рост/падение) на основе bookTicker данных.
+        Использует среднюю цену (bid + ask) / 2 для определения направления.
+        """
+        try:
+            current_time = time.time()
+            mid_price = (bid_price + ask_price) / 2
+            
+            # Инициализируем историю цен, если её нет
+            if symbol not in self.price_history:
+                self.price_history[symbol] = []
+                self.price_timestamps[symbol] = []
+                self.is_rise[symbol] = False
+                self.last_price_change[symbol] = current_time
+            
+            # Добавляем новую цену в историю
+            self.price_history[symbol].append(mid_price)
+            self.price_timestamps[symbol].append(current_time)
+            
+            # Ограничиваем размер истории
+            if len(self.price_history[symbol]) > self.max_history_size:
+                self.price_history[symbol] = self.price_history[symbol][-self.max_history_size:]
+                self.price_timestamps[symbol] = self.price_timestamps[symbol][-self.max_history_size:]
+            
+            # Определяем направление цены (нужно минимум 2 точки)
+            if len(self.price_history[symbol]) >= 2:
+                current_price = self.price_history[symbol][-1]
+                previous_price = self.price_history[symbol][-2]
+                
+                # Определяем новое направление
+                new_is_rise = current_price > previous_price
+                
+                # Если направление изменилось, обновляем время последнего изменения
+                if new_is_rise != self.is_rise[symbol]:
+                    self.last_price_change[symbol] = current_time
+                    logger.info(f"[PriceDirection] {symbol}: Direction changed from {'rise' if self.is_rise[symbol] else 'fall'} to {'rise' if new_is_rise else 'fall'}. Price: {previous_price:.6f} -> {current_price:.6f}")
+                
+                self.is_rise[symbol] = new_is_rise
+                
+                logger.debug(f"[PriceDirection] {symbol}: Current direction = {'rise' if new_is_rise else 'fall'}, Price = {current_price:.6f}")
+            
+        except Exception as e:
+            logger.error(f"Error updating price direction for {symbol}: {e}")
+
+    def get_price_direction(self, symbol: str) -> Dict[str, Any]:
+        """
+        Возвращает информацию о направлении цены для символа.
+        
+        Returns:
+            Dict с ключами:
+            - is_rise: bool - текущее направление (True = рост, False = падение)
+            - last_change_time: float - время последнего изменения направления
+            - current_price: float - текущая средняя цена
+            - price_history: List[float] - история цен (последние N значений)
+        """
+        if symbol not in self.is_rise:
+            return {
+                'is_rise': False,
+                'last_change_time': 0,
+                'current_price': 0,
+                'price_history': []
+            }
+        
+        current_price = 0
+        if self.price_history.get(symbol):
+            current_price = self.price_history[symbol][-1]
+        
+        return {
+            'is_rise': self.is_rise[symbol],
+            'last_change_time': self.last_price_change.get(symbol, 0),
+            'current_price': current_price,
+            'price_history': self.price_history.get(symbol, [])
+        }
 
     async def connect_user_data_stream(self, user_id: int) -> bool:
         """Connect to user data stream for a specific user."""
@@ -457,9 +531,12 @@ class MexcWebSocketManager:
             # Subscribe to symbols if provided
             if symbols:
                 await self.subscribe_market_data(symbols)
+                # Также подписываемся на bookTicker для тех же символов
+                await self.subscribe_bookticker_data(symbols)
             elif self.market_subscriptions:
                 # Reuse existing subscriptions
                 await self.subscribe_market_data(self.market_subscriptions)
+                await self.subscribe_bookticker_data(self.bookticker_subscriptions)
 
             # Start listening for messages
             asyncio.create_task(self._listen_market_messages())
@@ -583,7 +660,7 @@ class MexcWebSocketManager:
                              continue # Это сообщение об ошибке, не передаем его в handle_market_message
 
                         # Process market data
-                        logger.info(f"[MarketWS] Processing market data: {data}")  # Увеличиваем логирование
+                        logger.debug(f"[MarketWS] Processing market data: {data}")  # Уменьшаем логирование
                         await self.handle_market_message(data)
 
                     elif msg.type == aiohttp.WSMsgType.CLOSED:
@@ -640,7 +717,12 @@ class MexcWebSocketManager:
 
     def get_current_bookticker(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get current best bid/ask prices for a symbol."""
-        return self.current_bookticker.get(symbol)
+        bookticker_data = self.current_bookticker.get(symbol)
+        if bookticker_data:
+            # Добавляем информацию о направлении цены
+            direction_info = self.get_price_direction(symbol)
+            return {**bookticker_data, **direction_info}
+        return None
 
     def get_current_bid_ask(self, symbol: str) -> Optional[Tuple[str, str]]:
         """Get current best bid and ask prices for a symbol as a tuple."""

@@ -1,9 +1,11 @@
 import json
 import asyncio
+import time
 from typing import Dict, Any, Optional
 from decimal import Decimal
 
 from logger import logger
+
 from users.models import User, Deal
 from asgiref.sync import sync_to_async
 from bot.utils.bot_utils import send_message_safely
@@ -143,9 +145,6 @@ async def handle_bookticker_update(symbol: str, bid_price: str, ask_price: str, 
         ask_qty: Quantity at best ask
     """
     try:
-        # Log the bookTicker update
-        logger.debug(f"BookTicker update: {symbol} - bid: {bid_price} ({bid_qty}), ask: {ask_price} ({ask_qty})")
-        
         # Calculate spread
         try:
             bid = float(bid_price)
@@ -153,7 +152,18 @@ async def handle_bookticker_update(symbol: str, bid_price: str, ask_price: str, 
             spread = ask - bid
             spread_percentage = (spread / bid) * 100 if bid > 0 else 0
             
-            logger.debug(f"BookTicker spread for {symbol}: {spread:.8f} ({spread_percentage:.4f}%)")
+            # Логируем только раз в 10 секунд для уменьшения спама
+            current_time = time.time()
+            if not hasattr(handle_bookticker_update, 'last_log_time'):
+                handle_bookticker_update.last_log_time = {}
+            
+            if symbol not in handle_bookticker_update.last_log_time or \
+               current_time - handle_bookticker_update.last_log_time.get(symbol, 0) > 10:
+                
+                logger.debug(f"BookTicker update: {symbol} - bid: {bid_price} ({bid_qty}), ask: {ask_price} ({ask_qty})")
+                logger.debug(f"BookTicker spread for {symbol}: {spread:.8f} ({spread_percentage:.4f}%)")
+                handle_bookticker_update.last_log_time[symbol] = current_time
+                
         except (ValueError, TypeError):
             logger.warning(f"Could not calculate spread for {symbol}: bid={bid_price}, ask={ask_price}")
 
