@@ -66,7 +66,9 @@ async def autobuy_loop(message: Message, telegram_id: int):
                     'pause_trend_prices': [],  # Список цен во время паузы для анализа тренда
                     'trend_only_rise': True,  # Флаг исключительного роста во время паузы
                     'last_pause_price': None,  # Последняя цена во время паузы
-                    'rise_buy_count': 0  # Счетчик покупок на росте в текущем цикле
+                    'rise_buy_count': 0,  # Счетчик покупок на росте в текущем цикле
+                    'last_ask_price': None,  # Последняя ask цена для анализа триггеров
+                    'last_mid_price': None  # Последняя mid цена для анализа тренда
                 }
 
             # Восстанавливаем активные ордера из БД
@@ -130,7 +132,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
                     autobuy_states[telegram_id]['current_price'] = mid_price
 
                     # Логируем обновление bookTicker
-                    logger.debug(f"BookTicker update for {telegram_id} ({symbol_name}): bid={bid_price}, ask={ask_price}, mid={mid_price:.6f}, is_rise={is_rise}")
+                    # logger.info(f"BookTicker update for {telegram_id} ({symbol_name}): bid={bid_price}, ask={ask_price}, mid={mid_price:.6f}, is_rise={is_rise}")
 
                     # Проверяем триггеры для покупок на росте
                     await check_rise_triggers(telegram_id, symbol_name, float(bid_price), float(ask_price), is_rise, current_time, user_settings)
@@ -582,17 +584,16 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
         lock.release()
 
 
-# Обработка обновлений ордеров autobuy через WebSocket
 async def check_rise_triggers(telegram_id: int, symbol: str, bid_price: float, ask_price: float, is_rise: bool, current_time: float, user_settings: User):
     """
     Проверяет триггеры для покупок на росте цены с правильным анализом тренда.
-    
-    Новая правильная логика:
-    1. Триггер устанавливается на цену покупки/продажи
-    2. Активация триггера - когда ask цена пересекает триггер (вверх или вниз)
+
+    Логика:
+    1. Триггер устанавливается на ask_price (цена продажи)
+    2. Активация триггера - при пересечении ask_price уровня trigger_price (в любую сторону)
     3. Начало отсчета паузы - при активации триггера
-    4. Анализ тренда во время паузы - цена должна ТОЛЬКО расти
-    5. Сброс при падении - если хоть одно движение вниз → сбрасываем триггер
+    4. Анализ тренда во время паузы - mid цена должна только расти (без единого падения)
+    5. Сброс при малейшем движении вниз mid цены → сброс триггера
     6. Ожидание нового пересечения триггера
     """
     try:
@@ -601,85 +602,80 @@ async def check_rise_triggers(telegram_id: int, symbol: str, bid_price: float, a
 
         state = autobuy_states[telegram_id]
         ask_price_float = float(ask_price)
+        bid_price_float = float(bid_price)
+        mid_price = (bid_price_float + ask_price_float) / 2
         pause_seconds = user_settings.pause
 
-        # Если есть установленный триггер
+        # Инициализация и сохранение предыдущих цен
+        prev_ask_price = state.get('last_ask_price')
+        prev_mid_price = state.get('last_mid_price')
+        state['last_ask_price'] = ask_price_float
+        state['last_mid_price'] = mid_price
+
+        # Проверяем, что триггер установлен
         if state.get('is_rise_trigger') and state.get('trigger_price') is not None:
             trigger_price = state['trigger_price']
             is_activated = state.get('is_trigger_activated', False)
-            
-            # ЭТАП 1: Проверяем активацию триггера (пересечение цены)
+
+            # ЭТАП 1: Активация триггера при пересечении уровня в любую сторону
             if not is_activated:
-                # Проверяем пересечение триггера (цена поднялась выше триггера)
-                if ask_price_float > trigger_price:
-                    # Триггер активирован - начинаем отсчет паузы
-                    state['is_trigger_activated'] = True
-                    state['trigger_activated_time'] = current_time
-                    state['pause_trend_prices'] = [ask_price_float]
-                    state['trend_only_rise'] = True
-                    state['last_pause_price'] = ask_price_float
-                    
-                    logger.info(f"Trigger activated for {telegram_id}: ask price {ask_price_float:.6f} crossed trigger {trigger_price:.6f}. Starting pause analysis.")
-                    
-                    # Уведомление об активации триггера (закомментировано)
-                    # from bot.config import bot_instance
-                    # try:
-                    #     await bot_instance.send_message(
-                    #         telegram_id,
-                    #         f"🔔 Триггер активирован для {symbol}\n\n"
-                    #         f"📈 Цена ({ask_price_float:.6f} USDC) пересекла триггер {trigger_price:.6f} USDC\n"
-                    #         f"⏱️ Начинаем анализ тренда на {pause_seconds}с"
-                    #     )
-                    #     logger.info(f"Trigger activation notification sent to {telegram_id}")
-                    # except Exception as e:
-                    #     logger.error(f"Failed to send trigger activation notification to {telegram_id}: {e}")
-                        
+                if prev_ask_price is not None:
+                    crossed_up = (prev_ask_price <= trigger_price < ask_price_float)
+                    crossed_down = (prev_ask_price >= trigger_price > ask_price_float)
+                    if crossed_up or crossed_down:
+                        # Запускаем паузу и анализ тренда (используем mid цену)
+                        state['is_trigger_activated'] = True
+                        state['trigger_activated_time'] = current_time
+                        state['pause_trend_prices'] = [mid_price]  # Сохраняем mid цену
+                        state['trend_only_rise'] = True
+                        state['last_pause_price'] = mid_price
+
+                        direction = "↑" if crossed_up else "↓"
+                        logger.info(
+                            f"Trigger crossed {direction} for {telegram_id}: "
+                            f"ask {prev_ask_price:.6f} → {ask_price_float:.6f}, "
+                            f"mid {mid_price:.6f}. Starting {pause_seconds}s pause."
+                        )
+                        # Уведомление об активации триггера (закомментировано)
+                        # from bot.config import bot_instance
+                        # try:
+                        #     await bot_instance.send_message(
+                        #         telegram_id,
+                        #         f"🔔 Триггер активирован для {symbol}\n\n"
+                        #         f"📈 Цена ({ask_price_float:.6f} USDC) пересекла триггер {trigger_price:.6f} USDC\n"
+                        #         f"⏱️ Начинаем анализ тренда на {pause_seconds}с"
+                        #     )
+                        #     logger.info(f"Trigger activation notification sent to {telegram_id}")
+                        # except Exception as e:
+                        #     logger.error(f"Failed to send trigger activation notification to {telegram_id}: {e}")
+
             # ЭТАП 2: Анализ тренда во время паузы
             else:
                 triggered_time = state.get('trigger_activated_time', 0)
-                last_pause_price = state.get('last_pause_price', ask_price_float)
                 pause_prices = state.get('pause_trend_prices', [])
-                trend_only_rise = state.get('trend_only_rise', True)
-                
-                # Добавляем текущую цену к истории паузы
-                pause_prices.append(ask_price_float)
-                state['pause_trend_prices'] = pause_prices
-                
-                # Проверяем, есть ли падение во время паузы
-                if ask_price_float < last_pause_price:
-                    # Обнаружено падение - сбрасываем триггер
-                    trend_only_rise = False
-                    state['trend_only_rise'] = False
-                    
-                    logger.info(f"Price drop detected during pause for {telegram_id}: {ask_price_float:.6f} < {last_pause_price:.6f}. Resetting trigger.")
-                    
-                    # Уведомление о сбросе триггера (закомментировано)
-                    # from bot.config import bot_instance
-                    # try:
-                    #     await bot_instance.send_message(
-                    #         telegram_id,
-                    #         f"🔻 Триггер сброшен для {symbol}\n\n"
-                    #         f"📉 Обнаружено падение цены во время паузы\n"
-                    #         f"💔 Цена ({ask_price_float:.6f} USDC) упала ниже {last_pause_price:.6f} USDC\n"
-                    #         f"⏳ Ожидаем нового пересечения триггера"
-                    #     )
-                    #     logger.info(f"Trigger reset notification sent to {telegram_id}")
-                    # except Exception as e:
-                    #     logger.error(f"Failed to send trigger reset notification to {telegram_id}: {e}")
-                    
-                    # Сбрасываем триггер
+
+                # 2.1 Сброс при любом движении вниз mid цены относительно prev_mid_price
+                if prev_mid_price is not None and mid_price < prev_mid_price:
+                    logger.info(
+                        f"Mid price drop detected for {telegram_id}: {prev_mid_price:.6f} → {mid_price:.6f}. Resetting trigger."
+                    )
                     reset_rise_trigger(state)
                     return
-                    
-                # Обновляем последнюю цену паузы
-                state['last_pause_price'] = ask_price_float
-                
-                # ЭТАП 3: Проверяем завершение паузы
-                if current_time >= triggered_time + pause_seconds:
-                    if trend_only_rise and ask_price_float > trigger_price:
-                        # Условия выполнены - совершаем покупку
-                        logger.info(f"Rise conditions met for {telegram_id}: exclusive rise during {pause_seconds}s pause. Final price: {ask_price_float:.6f}")
-                        
+
+                # 2.2 Добавляем текущую mid цену в историю паузы
+                pause_prices.append(mid_price)
+                state['pause_trend_prices'] = pause_prices
+
+                # 2.3 Проверяем завершение паузы
+                elapsed = current_time - triggered_time
+                if elapsed >= pause_seconds:
+                    # Если рост без единого падения и ask цена выше триггера — покупаем
+                    if state.get('trend_only_rise', True) and ask_price_float > trigger_price:
+                        logger.info(
+                            f"Rise conditions met for {telegram_id}: exclusive mid price rise during {pause_seconds}s pause. "
+                            f"Final ask: {ask_price_float:.6f}, final mid: {mid_price:.6f}"
+                        )
+
                         # Уведомление о покупке
                         from bot.config import bot_instance
                         try:
@@ -693,44 +689,32 @@ async def check_rise_triggers(telegram_id: int, symbol: str, bid_price: float, a
                             logger.info(f"Rise purchase notification sent to {telegram_id}")
                         except Exception as e:
                             logger.error(f"Failed to send rise purchase notification to {telegram_id}: {e}")
-                        
+
                         # Совершаем покупку
                         from bot.utils.autobuy_restart import FakeMessage
                         from bot.config import bot_instance
                         fake_message = FakeMessage(telegram_id, bot_instance)
                         asyncio.create_task(process_buy(telegram_id, "rise_trigger", fake_message, user_settings))
-                        
-                        # Устанавливаем новый триггер по текущей ask цене
+
+                        # Устанавливаем новый триггер по текущей цене
                         state['trigger_price'] = ask_price_float
                         state['trigger_time'] = current_time
                         state['is_trigger_activated'] = False
                         state['rise_buy_count'] += 1
-                        
+
                         # Очищаем данные паузы
                         state['pause_trend_prices'] = []
                         state['trend_only_rise'] = True
                         state['last_pause_price'] = None
-                        
-                        logger.info(f"New rise trigger set for {telegram_id} at ask price {ask_price_float:.6f}")
+
+                        logger.info(
+                            f"New rise trigger set for {telegram_id} at ask price {ask_price_float:.6f}"
+                        )
                     else:
-                        # Условия не выполнены - сбрасываем триггер
-                        logger.info(f"Rise conditions NOT met for {telegram_id}. Final price: {ask_price_float:.6f}, trend_only_rise: {trend_only_rise}")
-                        
-                        # Уведомление о неудачном завершении паузы (закомментировано)
-                        # from bot.config import bot_instance
-                        # try:
-                        #     await bot_instance.send_message(
-                        #         telegram_id,
-                        #         f"❌ Условия роста не выполнены для {symbol}\n\n"
-                        #         f"📊 Анализ паузы завершен\n"
-                        #         f"📉 Обнаружены падения во время паузы\n"
-                        #         f"⏳ Ожидаем нового пересечения триггера"
-                        #     )
-                        #     logger.info(f"Failed rise conditions notification sent to {telegram_id}")
-                        # except Exception as e:
-                        #     logger.error(f"Failed to send failed conditions notification to {telegram_id}: {e}")
-                        
-                        # Сбрасываем триггер
+                        logger.info(
+                            f"Rise conditions NOT met for {telegram_id}. Final price: {ask_price_float:.6f}, "
+                            f"trend_only_rise: {state.get('trend_only_rise', False)}"
+                        )
                         reset_rise_trigger(state)
 
     except Exception as e:
@@ -747,6 +731,8 @@ def reset_rise_trigger(state):
     state['pause_trend_prices'] = []
     state['trend_only_rise'] = True
     state['last_pause_price'] = None
+    state['last_ask_price'] = None
+    state['last_mid_price'] = None
 
 
 async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
@@ -792,6 +778,8 @@ async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
                     autobuy_states[user_id]['pause_trend_prices'] = []
                     autobuy_states[user_id]['trend_only_rise'] = True
                     autobuy_states[user_id]['last_pause_price'] = None
+                    autobuy_states[user_id]['last_ask_price'] = None
+                    autobuy_states[user_id]['last_mid_price'] = None
                     
                     logger.info(f"[AutobuyOrderUpdate] User {user_id}: Rise trigger set at ask price {ask_price:.6f} after order {order_id} filled")
                 else:

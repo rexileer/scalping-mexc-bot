@@ -160,8 +160,8 @@ async def handle_bookticker_update(symbol: str, bid_price: str, ask_price: str, 
             if symbol not in handle_bookticker_update.last_log_time or \
                current_time - handle_bookticker_update.last_log_time.get(symbol, 0) > 10:
                 
-                logger.debug(f"BookTicker update: {symbol} - bid: {bid_price} ({bid_qty}), ask: {ask_price} ({ask_qty})")
-                logger.debug(f"BookTicker spread for {symbol}: {spread:.8f} ({spread_percentage:.4f}%)")
+                # logger.debug(f"BookTicker update: {symbol} - bid: {bid_price} ({bid_qty}), ask: {ask_price} ({ask_qty})")
+                # logger.debug(f"BookTicker spread for {symbol}: {spread:.8f} ({spread_percentage:.4f}%)")
                 handle_bookticker_update.last_log_time[symbol] = current_time
                 
         except (ValueError, TypeError):

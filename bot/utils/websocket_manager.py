@@ -195,7 +195,7 @@ class MexcWebSocketManager:
                                 'timestamp': message.get('t', int(time.time() * 1000))
                             }
 
-                            logger.debug(f"[MarketWS] BookTicker update for {symbol}: bid={bid_price}, ask={ask_price}")
+                            # logger.debug(f"[MarketWS] BookTicker update for {symbol}: bid={bid_price}, ask={ask_price}")
 
                             # Call bookTicker-specific handlers
                             await handle_bookticker_update(symbol, bid_price, ask_price, bid_qty, ask_qty)
