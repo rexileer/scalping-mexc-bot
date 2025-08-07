@@ -478,6 +478,10 @@ class MexcWebSocketManager:
                         logger.error(f"JSON decode error for user {user_id}: {e}, data: {msg.data[:200]}")
                         continue
 
+                    # Логируем ВСЕ входящие сообщения для диагностики (кроме рыночных данных)
+                    if not ('c' in data and data.get('c') in ['spot@private.orders.v3.api', 'spot@private.account.v3.api']):
+                        logger.info(f"[UserWS] 📨 Received message for user {user_id}: {data}")
+
                     # Обрабатываем ответы на PING (официальный формат MEXC)
                     if data.get("msg") == "PONG":
                         logger.warning(f"[UserWS] 🏓 Received PONG response for user {user_id}: {data}")
@@ -780,6 +784,10 @@ class MexcWebSocketManager:
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
                         data = json.loads(msg.data)
+                        
+                        # Логируем ВСЕ входящие сообщения для диагностики
+                        if not ('s' in data and 'c' in data):  # Не логируем рыночные данные
+                            logger.info(f"[MarketWS] 📨 Received message: {data}")
                         
                         # Обрабатываем control messages
                         if 'pong' in data:
