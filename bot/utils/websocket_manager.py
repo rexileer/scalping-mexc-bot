@@ -451,6 +451,9 @@ class MexcWebSocketManager:
 
         ws = self.user_connections[user_id]['ws']
 
+        # Запускаем ping задачу для поддержания соединения
+        ping_task = asyncio.create_task(self._ping_user_loop(ws, user_id))
+
         try:
             # Импортируем обработчики внутри метода
             from bot.utils.websocket_handlers import update_order_status, handle_order_update, handle_account_update
@@ -459,16 +462,14 @@ class MexcWebSocketManager:
                 try:
                     msg = await ws.receive(timeout=30)
                 except asyncio.TimeoutError:
-                    # Проверяем соединение с помощью пинга
+                    connection_age = time.time() - self.user_connections[user_id].get('created_at', time.time())
+                    logger.warning(f"[UserWS] Timeout for user {user_id} after {connection_age:.1f}s - no messages from MEXC for 30 seconds")
+                    # Проверяем соединение
                     if ws.closed:
                         logger.warning(f"WebSocket for user {user_id} closed during receive timeout.")
                         break
-                    try:
-                        await self.send_ping(ws)
-                        continue
-                    except Exception:
-                        logger.warning(f"Failed to send ping for user {user_id}, connection may be broken.")
-                        break
+                    # Продолжаем слушать - ping задачи работают в фоне
+                    continue
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
                     try:
@@ -485,14 +486,14 @@ class MexcWebSocketManager:
 
                     # Проверка PING/PONG
                     if 'pong' in data:
-                        logger.debug(f"Received PONG from server for user {user_id}")
+                        logger.info(f"[UserWS] Received PONG from server for user {user_id}")
                         continue
 
                     if 'ping' in data:
                         try:
                             pong_msg = {'pong': data['ping']}
                             await ws.send_str(json.dumps(pong_msg))
-                            logger.debug(f"[UserWS] Received PING {data['ping']}, sent PONG for user {user_id}")
+                            logger.info(f"[UserWS] Received PING {data['ping']}, sent PONG for user {user_id}")
                         except Exception as e:
                             logger.error(f"[UserWS] Failed to send PONG for user {user_id}: {e}")
                             break
@@ -539,11 +540,13 @@ class MexcWebSocketManager:
                         logger.debug(f"Неизвестный канал для {user_id}: {channel}, данные: {json.dumps(data)}")
 
                 elif msg.type == aiohttp.WSMsgType.CLOSED:
-                    logger.warning(f"WebSocket for user {user_id} closed")
+                    connection_age = time.time() - self.user_connections[user_id].get('created_at', time.time())
+                    logger.warning(f"WebSocket for user {user_id} closed. Code: {ws.close_code}, Reason: {msg.data}, Age: {connection_age:.1f}s")
                     break
 
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"WebSocket error for user {user_id}: {ws.exception()}")
+                    connection_age = time.time() - self.user_connections[user_id].get('created_at', time.time())
+                    logger.error(f"WebSocket error for user {user_id} after {connection_age:.1f}s: {ws.exception()}")
                     break
                 elif msg.type == aiohttp.WSMsgType.CLOSING:
                     logger.info(f"WebSocket for user {user_id} is closing")
@@ -557,6 +560,14 @@ class MexcWebSocketManager:
         except Exception as e:
             logger.error(f"Error in user WebSocket for {user_id}: {e}")
         finally:
+            # Останавливаем ping задачу
+            if 'ping_task' in locals():
+                ping_task.cancel()
+                try:
+                    await ping_task
+                except asyncio.CancelledError:
+                    pass
+            
             # НЕ переподключаемся автоматически из этого места
             # Пусть monitor_connections управляет переподключениями
             logger.info(f"User {user_id} WebSocket listener stopped")
@@ -740,19 +751,25 @@ class MexcWebSocketManager:
         # Сбрасываем delay при успешном старте
         self.reconnect_delay = 1
 
+        # Запускаем ping задачу для поддержания соединения
+        ping_task = asyncio.create_task(self._ping_market_loop(ws))
+
         try:
             while not self.is_shutting_down and self.market_connection and not ws.closed:
                 try:
                     msg = await ws.receive(timeout=30)
                 except asyncio.TimeoutError:
+                    connection_age = time.time() - self.market_connection.get('created_at', time.time())
+                    logger.warning(f"[MarketWS] Timeout after {connection_age:.1f}s - no messages from MEXC for 30 seconds")
                     # При таймауте просто проверяем состояние и продолжаем
                     if ws.closed:
                         logger.warning("[MarketWS] WebSocket closed during receive timeout.")
                         break
-                    # Отправляем ping только если прошло достаточно времени
+                    # Продолжаем слушать - возможно MEXC не отправляет регулярные сообщения
                     continue
                 except Exception as e:
-                    logger.error(f"[MarketWS] Error receiving message: {e}")
+                    connection_age = time.time() - self.market_connection.get('created_at', time.time())
+                    logger.error(f"[MarketWS] Error receiving message after {connection_age:.1f}s: {e}")
                     break
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
@@ -761,13 +778,13 @@ class MexcWebSocketManager:
                         
                         # Обрабатываем control messages
                         if 'pong' in data:
-                            logger.debug(f"[MarketWS] Received PONG from server: {data}")
+                            logger.info(f"[MarketWS] Received PONG from server: {data}")
                             continue
                         if 'ping' in data:
                             try:
                                 pong_response = {"pong": data['ping']}
                                 await ws.send_json(pong_response)
-                                logger.debug(f"[MarketWS] Received PING {data['ping']}, sent PONG")
+                                logger.info(f"[MarketWS] Received PING {data['ping']}, sent PONG")
                             except Exception as e:
                                 logger.error(f"[MarketWS] Failed to send PONG: {e}")
                                 break
@@ -797,11 +814,13 @@ class MexcWebSocketManager:
                         continue
 
                 elif msg.type == aiohttp.WSMsgType.CLOSED:
-                    logger.info(f"[MarketWS] WebSocket closed normally. Code: {ws.close_code}")
+                    connection_age = time.time() - self.market_connection.get('created_at', time.time())
+                    logger.warning(f"[MarketWS] WebSocket closed. Code: {ws.close_code}, Reason: {msg.data}, Age: {connection_age:.1f}s")
                     break
 
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error(f"[MarketWS] WebSocket error: {ws.exception()}")
+                    connection_age = time.time() - self.market_connection.get('created_at', time.time())
+                    logger.error(f"[MarketWS] WebSocket error after {connection_age:.1f}s: {ws.exception()}")
                     break
                     
                 elif msg.type == aiohttp.WSMsgType.CLOSING:
@@ -818,12 +837,66 @@ class MexcWebSocketManager:
         except Exception as e:
             logger.error(f"[MarketWS] Unexpected error in _listen_market_messages: {e}", exc_info=True)
         finally:
+            # Останавливаем ping задачу
+            if 'ping_task' in locals():
+                ping_task.cancel()
+                try:
+                    await ping_task
+                except asyncio.CancelledError:
+                    pass
+            
             # Сбрасываем флаги активности
             self.market_listener_active = False
             if hasattr(self, '_market_listener_started'):
                 delattr(self, '_market_listener_started')
             # НЕ переподключаемся автоматически - это будет делать monitor_connections
             logger.info("[MarketWS] Market WebSocket listener stopped")
+
+    async def _ping_market_loop(self, ws):
+        """Отправляет PING каждые 20 секунд для поддержания market соединения"""
+        try:
+            while not ws.closed and not self.is_shutting_down:
+                await asyncio.sleep(20)  # Пинг каждые 20 секунд
+                
+                if ws.closed or self.is_shutting_down:
+                    break
+                    
+                try:
+                    ping_id = int(time.time() * 1000)
+                    ping_message = {"ping": ping_id}
+                    await ws.send_json(ping_message)
+                    logger.info(f"[MarketWS] Sent PING {ping_id}")
+                except Exception as e:
+                    logger.error(f"[MarketWS] Failed to send PING: {e}")
+                    break
+                    
+        except asyncio.CancelledError:
+            logger.debug("[MarketWS] Ping loop cancelled")
+        except Exception as e:
+            logger.error(f"[MarketWS] Ping loop error: {e}")
+
+    async def _ping_user_loop(self, ws, user_id: int):
+        """Отправляет PING каждые 20 секунд для поддержания user соединения"""
+        try:
+            while not ws.closed and not self.is_shutting_down and user_id in self.user_connections:
+                await asyncio.sleep(20)  # Пинг каждые 20 секунд
+                
+                if ws.closed or self.is_shutting_down or user_id not in self.user_connections:
+                    break
+                    
+                try:
+                    ping_id = int(time.time() * 1000)
+                    ping_message = {"ping": ping_id}
+                    await ws.send_str(json.dumps(ping_message))
+                    logger.info(f"[UserWS] Sent PING {ping_id} to user {user_id}")
+                except Exception as e:
+                    logger.error(f"[UserWS] Failed to send PING to user {user_id}: {e}")
+                    break
+                    
+        except asyncio.CancelledError:
+            logger.debug(f"[UserWS] Ping loop cancelled for user {user_id}")
+        except Exception as e:
+            logger.error(f"[UserWS] Ping loop error for user {user_id}: {e}")
 
     async def register_price_callback(self, symbol: str, callback: Callable[[str, Any], None]):
         """Register a callback function for price updates."""
