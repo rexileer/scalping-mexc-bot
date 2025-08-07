@@ -451,7 +451,7 @@ class MexcWebSocketManager:
 
         ws = self.user_connections[user_id]['ws']
 
-        # Запускаем ping задачу для поддержания соединения
+        # Запускаем ping задачу для поддержания соединения (MEXC требует активность каждые 60 сек)
         ping_task = asyncio.create_task(self._ping_user_loop(ws, user_id))
 
         try:
@@ -460,10 +460,10 @@ class MexcWebSocketManager:
 
             while not self.is_shutting_down and user_id in self.user_connections:
                 try:
-                    msg = await ws.receive(timeout=30)
+                    msg = await ws.receive(timeout=60)  # Увеличиваем до 60 секунд для ожидания PING от MEXC
                 except asyncio.TimeoutError:
                     connection_age = time.time() - self.user_connections[user_id].get('created_at', time.time())
-                    logger.warning(f"[UserWS] Timeout for user {user_id} after {connection_age:.1f}s - no messages from MEXC for 30 seconds")
+                    logger.debug(f"[UserWS] Timeout for user {user_id} after {connection_age:.1f}s - no messages from MEXC for 60 seconds")
                     # Проверяем соединение
                     if ws.closed:
                         logger.warning(f"WebSocket for user {user_id} closed during receive timeout.")
@@ -478,22 +478,27 @@ class MexcWebSocketManager:
                         logger.error(f"JSON decode error for user {user_id}: {e}, data: {msg.data[:200]}")
                         continue
 
+                    # Обрабатываем ответы на PING (официальный формат MEXC)
+                    if data.get("msg") == "PONG":
+                        logger.warning(f"[UserWS] 🏓 Received PONG response for user {user_id}: {data}")
+                        continue
+                        
                     # Проверка сервисных сообщений
                     if 'id' in data and 'code' in data:
                         # Понижаем уровень логирования
                         logger.debug(f"Сервисное сообщение для {user_id}: {data}")
                         continue
 
-                    # Проверка PING/PONG
+                    # Проверка PING/PONG (старый формат)
                     if 'pong' in data:
-                        logger.info(f"[UserWS] Received PONG from server for user {user_id}")
+                        logger.warning(f"[UserWS] 🏓 Received PONG from server for user {user_id}")
                         continue
 
                     if 'ping' in data:
                         try:
                             pong_msg = {'pong': data['ping']}
                             await ws.send_str(json.dumps(pong_msg))
-                            logger.info(f"[UserWS] Received PING {data['ping']}, sent PONG for user {user_id}")
+                            logger.warning(f"[UserWS] 🏓 Received PING {data['ping']}, sent PONG for user {user_id}")
                         except Exception as e:
                             logger.error(f"[UserWS] Failed to send PONG for user {user_id}: {e}")
                             break
@@ -751,16 +756,16 @@ class MexcWebSocketManager:
         # Сбрасываем delay при успешном старте
         self.reconnect_delay = 1
 
-        # Запускаем ping задачу для поддержания соединения
+        # Запускаем ping задачу для поддержания соединения (MEXC требует активность каждые 60 сек)
         ping_task = asyncio.create_task(self._ping_market_loop(ws))
 
         try:
             while not self.is_shutting_down and self.market_connection and not ws.closed:
                 try:
-                    msg = await ws.receive(timeout=30)
+                    msg = await ws.receive(timeout=60)  # Увеличиваем до 60 секунд для ожидания PING от MEXC
                 except asyncio.TimeoutError:
                     connection_age = time.time() - self.market_connection.get('created_at', time.time())
-                    logger.warning(f"[MarketWS] Timeout after {connection_age:.1f}s - no messages from MEXC for 30 seconds")
+                    logger.debug(f"[MarketWS] Timeout after {connection_age:.1f}s - no messages from MEXC for 60 seconds")
                     # При таймауте просто проверяем состояние и продолжаем
                     if ws.closed:
                         logger.warning("[MarketWS] WebSocket closed during receive timeout.")
@@ -778,16 +783,21 @@ class MexcWebSocketManager:
                         
                         # Обрабатываем control messages
                         if 'pong' in data:
-                            logger.info(f"[MarketWS] Received PONG from server: {data}")
+                            logger.warning(f"[MarketWS] 🏓 Received PONG from server: {data}")
                             continue
                         if 'ping' in data:
                             try:
                                 pong_response = {"pong": data['ping']}
                                 await ws.send_json(pong_response)
-                                logger.info(f"[MarketWS] Received PING {data['ping']}, sent PONG")
+                                logger.warning(f"[MarketWS] 🏓 Received PING {data['ping']}, sent PONG")
                             except Exception as e:
                                 logger.error(f"[MarketWS] Failed to send PONG: {e}")
                                 break
+                            continue
+                            
+                        # Обрабатываем ответы на PING (официальный формат MEXC)
+                        if data.get("msg") == "PONG":
+                            logger.warning(f"[MarketWS] 🏓 Received PONG response: {data}")
                             continue
                             
                         # Обрабатываем ответы на подписку
@@ -853,19 +863,19 @@ class MexcWebSocketManager:
             logger.info("[MarketWS] Market WebSocket listener stopped")
 
     async def _ping_market_loop(self, ws):
-        """Отправляет PING каждые 20 секунд для поддержания market соединения"""
+        """Отправляет PING каждые 30 секунд для поддержания market соединения"""
         try:
             while not ws.closed and not self.is_shutting_down:
-                await asyncio.sleep(20)  # Пинг каждые 20 секунд
+                await asyncio.sleep(30)  # Пинг каждые 30 секунд (MEXC дисконнектит через 60)
                 
                 if ws.closed or self.is_shutting_down:
                     break
                     
                 try:
-                    ping_id = int(time.time() * 1000)
-                    ping_message = {"ping": ping_id}
+                    # Используем официальный формат MEXC согласно документации
+                    ping_message = {"method": "PING"}
                     await ws.send_json(ping_message)
-                    logger.info(f"[MarketWS] Sent PING {ping_id}")
+                    logger.info(f"[MarketWS] 📡 Sent PING (official format)")
                 except Exception as e:
                     logger.error(f"[MarketWS] Failed to send PING: {e}")
                     break
@@ -876,19 +886,19 @@ class MexcWebSocketManager:
             logger.error(f"[MarketWS] Ping loop error: {e}")
 
     async def _ping_user_loop(self, ws, user_id: int):
-        """Отправляет PING каждые 20 секунд для поддержания user соединения"""
+        """Отправляет PING каждые 30 секунд для поддержания user соединения"""
         try:
             while not ws.closed and not self.is_shutting_down and user_id in self.user_connections:
-                await asyncio.sleep(20)  # Пинг каждые 20 секунд
+                await asyncio.sleep(30)  # Пинг каждые 30 секунд (MEXC дисконнектит через 60)
                 
                 if ws.closed or self.is_shutting_down or user_id not in self.user_connections:
                     break
                     
                 try:
-                    ping_id = int(time.time() * 1000)
-                    ping_message = {"ping": ping_id}
+                    # Используем официальный формат MEXC согласно документации
+                    ping_message = {"method": "PING"}
                     await ws.send_str(json.dumps(ping_message))
-                    logger.info(f"[UserWS] Sent PING {ping_id} to user {user_id}")
+                    logger.info(f"[UserWS] 📡 Sent PING (official format) to user {user_id}")
                 except Exception as e:
                     logger.error(f"[UserWS] Failed to send PING to user {user_id}: {e}")
                     break
