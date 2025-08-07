@@ -69,6 +69,9 @@ async def main():
         logger.info("Initializing WebSocket connections for users...")
         websocket_init_task = asyncio.create_task(websocket_manager.connect_valid_users())
         
+        # Запускаем мониторинг соединений
+        connection_monitor_task = asyncio.create_task(websocket_manager.monitor_connections())
+        
         # Инициализируем общее WebSocket соединение для мониторинга цен
         # Будем инициализировать его по требованию
         logger.info("Bot started successfully")

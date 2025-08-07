@@ -155,10 +155,15 @@ class MexcWebSocketManager:
                ((user_id is not None and user_id in self.user_connections) or
                 (user_id is None and self.market_connection is not None))):
             try:
+                # Проверяем, что соединение еще открыто перед отправкой ping
+                if ws.closed:
+                    logger.warning(f"WebSocket closed in ping loop for {'user ' + str(user_id) if user_id else 'market'}")
+                    break
+                
                 await self.send_ping(ws)
                 await asyncio.sleep(20)  # Send ping every 20 seconds
             except Exception as e:
-                logger.error(f"Error in ping loop: {e}")
+                logger.error(f"Error in ping loop for {'user ' + str(user_id) if user_id else 'market'}: {e}")
                 break
 
     async def handle_market_message(self, message: dict):
@@ -360,7 +365,7 @@ class MexcWebSocketManager:
 
             ws_url = f"{self.BASE_URL}?listenKey={listen_key}"
 
-            # Create WebSocket connection
+            # Create WebSocket connection with proper session management
             session = aiohttp.ClientSession()
             try:
                 ws = await session.ws_connect(ws_url)
@@ -375,7 +380,8 @@ class MexcWebSocketManager:
                 'ws': ws,
                 'session': session,
                 'listen_key': listen_key,
-                'tasks': []  # Список для хранения задач
+                'tasks': [],  # Список для хранения задач
+                'created_at': time.time()  # Добавляем время создания для отслеживания
             }
 
             # Start ping loop to keep connection alive
@@ -433,7 +439,11 @@ class MexcWebSocketManager:
                         break
 
                 if msg.type == aiohttp.WSMsgType.TEXT:
-                    data = json.loads(msg.data)
+                    try:
+                        data = json.loads(msg.data)
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON decode error for user {user_id}: {e}, data: {msg.data[:200]}")
+                        continue
 
                     # Проверка сервисных сообщений
                     if 'id' in data and 'code' in data:
@@ -454,6 +464,7 @@ class MexcWebSocketManager:
 
                     # Обработка событий с данными
                     channel = data.get('c')
+                    logger.debug(f"User {user_id} received message on channel: {channel}")
 
                     if channel == "spot@private.orders.v3.api":
                         # Обрабатываем обновления ордера
@@ -472,7 +483,7 @@ class MexcWebSocketManager:
                         }
                         status = status_map.get(status_code, "UNKNOWN")
 
-                        logger.info(f"Обновление ордера {order_id} для пользователя {user_id}: {symbol} - {status}")
+                        logger.info(f"Обновление ордера {order_id} для пользователя {user_id}: {symbol} - {status} (код: {status_code})")
 
                         # Обновляем статус в БД
                         try:
@@ -498,6 +509,11 @@ class MexcWebSocketManager:
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     logger.error(f"WebSocket error for user {user_id}: {ws.exception()}")
                     break
+                elif msg.type == aiohttp.WSMsgType.CLOSING:
+                    logger.info(f"WebSocket for user {user_id} is closing")
+                    await asyncio.sleep(1)
+                    if ws.closed:
+                        break
         except (asyncio.CancelledError, GeneratorExit):
             logger.info(f"WebSocket listener task cancelled for user {user_id}")
         except json.JSONDecodeError as e:
@@ -527,7 +543,8 @@ class MexcWebSocketManager:
 
             self.market_connection = {
                 'ws': ws,
-                'session': session
+                'session': session,
+                'created_at': time.time()  # Добавляем время создания для отслеживания
             }
 
             # Start ping loop
@@ -633,7 +650,11 @@ class MexcWebSocketManager:
                         logger.warning("[MarketWS] WebSocket closed during receive timeout.")
                         break
                     # Если не закрыто, отправляем пинг для поддержания активности, если необходимо
-                    await self.send_ping(ws)
+                    try:
+                        await self.send_ping(ws)
+                    except Exception as e:
+                        logger.error(f"[MarketWS] Error sending ping during timeout: {e}")
+                        break
                     continue
 
                 if msg:
@@ -677,7 +698,10 @@ class MexcWebSocketManager:
                         break
                     elif msg.type == aiohttp.WSMsgType.CLOSING:
                         logger.info("[MarketWS] WebSocket CLOSING message received.")
-                        break # Начинаем процесс закрытия
+                        # Не выходим сразу, даем время на корректное закрытие
+                        await asyncio.sleep(1)
+                        if ws.closed:
+                            break
                     else:
                         logger.debug(f"[MarketWS] Received other message type: {msg.type}")
                 else:
@@ -832,6 +856,9 @@ class MexcWebSocketManager:
                 logger.info(f"Disconnected user {user_id} from WebSocket")
             except Exception as e:
                 logger.error(f"Error disconnecting user {user_id}: {e}")
+                # Убеждаемся, что пользователь удален из соединений даже при ошибке
+                if user_id in self.user_connections:
+                    del self.user_connections[user_id]
 
     async def disconnect_market(self):
         """Disconnect from market data WebSocket."""
@@ -919,6 +946,62 @@ class MexcWebSocketManager:
         except Exception as e:
             logger.error(f"Ошибка при подписке на обновления ордеров пользователя {user_id}: {e}")
             return False
+
+    async def monitor_connections(self):
+        """Monitor and clean up stale connections."""
+        while not self.is_shutting_down:
+            try:
+                current_time = time.time()
+                
+                # Проверяем пользовательские соединения
+                for user_id in list(self.user_connections.keys()):
+                    connection_data = self.user_connections[user_id]
+                    created_at = connection_data.get('created_at', 0)
+                    
+                    # Если соединение старше 30 минут, переподключаем
+                    if current_time - created_at > 1800:  # 30 minutes
+                        logger.info(f"Connection for user {user_id} is stale, reconnecting...")
+                        await self.disconnect_user(user_id)
+                        await asyncio.sleep(1)
+                        await self.connect_user_data_stream(user_id)
+                
+                # Проверяем market соединение
+                if self.market_connection:
+                    market_created = getattr(self.market_connection, 'created_at', 0)
+                    if current_time - market_created > 1800:
+                        logger.info("Market connection is stale, reconnecting...")
+                        await self.disconnect_market()
+                        await asyncio.sleep(1)
+                        await self.connect_market_data()
+                
+                # Ждем 5 минут перед следующей проверкой
+                await asyncio.sleep(300)
+                
+            except Exception as e:
+                logger.error(f"Error in connection monitor: {e}")
+                await asyncio.sleep(60)
+
+    async def get_connection_stats(self):
+        """Get statistics about current connections."""
+        stats = {
+            'user_connections': len(self.user_connections),
+            'market_connection': self.market_connection is not None,
+            'ping_tasks': len(self.ping_tasks),
+            'reconnecting_users': len(self.reconnecting_users)
+        }
+        
+        # Подсчитываем активные сессии
+        session_count = 0
+        for connection_data in self.user_connections.values():
+            if 'session' in connection_data and not connection_data['session'].closed:
+                session_count += 1
+        
+        if self.market_connection and 'session' in self.market_connection:
+            if not self.market_connection['session'].closed:
+                session_count += 1
+        
+        stats['active_sessions'] = session_count
+        return stats
 
 
 # Create a singleton instance that will be imported and used throughout the application
