@@ -30,6 +30,8 @@ class MexcWebSocketManager:
         self.reconnect_delay = 1  # Initial reconnect delay in seconds
         self.is_shutting_down = False
         self.reconnecting_users = set()  # Set to track users currently in reconnection process
+        self.market_connection_lock = asyncio.Lock()  # Блокировка для market connection
+        self.market_listener_active = False  # Флаг активного listener
         
         # Новые поля для отслеживания роста/падения цены
         self.price_history: Dict[str, List[float]] = {}  # {symbol: [prices]}
@@ -395,7 +397,7 @@ class MexcWebSocketManager:
             try:
                 ws = await session.ws_connect(
                     ws_url,
-                    heartbeat=20,
+                    heartbeat=None,  # MEXC сам отправляет PING
                     compress=False
                 )
             except Exception as e:
@@ -413,10 +415,10 @@ class MexcWebSocketManager:
                 'reconnect_count': 0
             }
 
-            # Запускаем ping loop
-            ping_task = asyncio.create_task(self.ping_loop(ws, user_id))
-            self.ping_tasks[user_id] = ping_task
-            self.user_connections[user_id]['tasks'].append(ping_task)
+            # НЕ запускаем ping loop для user connections - MEXC сам отправляет PING
+            # ping_task = asyncio.create_task(self.ping_loop(ws, user_id))
+            # self.ping_tasks[user_id] = ping_task
+            # self.user_connections[user_id]['tasks'].append(ping_task)
 
             # Запускаем keep alive для listen key
             keep_alive_task = asyncio.create_task(
@@ -487,9 +489,13 @@ class MexcWebSocketManager:
                         continue
 
                     if 'ping' in data:
-                        pong_msg = {'pong': data['ping']}
-                        await ws.send_str(json.dumps(pong_msg))
-                        logger.debug(f"Sent PONG in response to server PING for user {user_id}")
+                        try:
+                            pong_msg = {'pong': data['ping']}
+                            await ws.send_str(json.dumps(pong_msg))
+                            logger.debug(f"[UserWS] Received PING {data['ping']}, sent PONG for user {user_id}")
+                        except Exception as e:
+                            logger.error(f"[UserWS] Failed to send PONG for user {user_id}: {e}")
+                            break
                         continue
 
                     # Обработка событий с данными
@@ -560,73 +566,99 @@ class MexcWebSocketManager:
         Connect to market data stream and subscribe to specified symbols.
         If no symbols are provided, will use existing subscriptions.
         """
-        # Если уже есть активное соединение, отключаем его
-        if self.market_connection:
-            await self.disconnect_market()
-            await asyncio.sleep(0.5)  # Небольшая пауза
+        async with self.market_connection_lock:
+            # Проверяем, есть ли уже здоровое соединение
+            if self.market_connection:
+                ws = self.market_connection.get('ws')
+                if ws and not ws.closed:
+                    logger.debug("Market connection already exists and is healthy")
+                    # Если нужно добавить новые символы к существующему соединению
+                    if symbols:
+                        new_symbols = [s for s in symbols if s not in self.market_subscriptions]
+                        if new_symbols:
+                            await self.subscribe_market_data(new_symbols)
+                            await self.subscribe_bookticker_data(new_symbols)
+                    return True
+                
+                # Если соединение нездоровое, отключаем его
+                await self.disconnect_market()
+                await asyncio.sleep(0.5)
 
-        try:
-            # Создаем новую сессию с правильными настройками
-            timeout = aiohttp.ClientTimeout(total=30)
-            session = aiohttp.ClientSession(
-                timeout=timeout,
-                connector=aiohttp.TCPConnector(
-                    limit=100,
-                    limit_per_host=30,
-                    keepalive_timeout=30,
-                    enable_cleanup_closed=True
+            try:
+                logger.info(f"[MarketWS] Starting connection to {self.BASE_URL}")
+                
+                # Создаем новую сессию с правильными настройками
+                timeout = aiohttp.ClientTimeout(total=30)
+                session = aiohttp.ClientSession(
+                    timeout=timeout,
+                    connector=aiohttp.TCPConnector(
+                        limit=100,
+                        limit_per_host=30,
+                        keepalive_timeout=30,
+                        enable_cleanup_closed=True
+                    )
                 )
-            )
-            
-            ws = await session.ws_connect(
-                self.BASE_URL,
-                heartbeat=20,  # Автоматический heartbeat
-                compress=False  # Отключаем сжатие для стабильности
-            )
+                logger.debug("[MarketWS] Created session with optimized settings")
+                
+                ws = await session.ws_connect(
+                    self.BASE_URL,
+                    # НЕ используем автоматический heartbeat - MEXC сам отправляет PING
+                    heartbeat=None,  
+                    compress=False  # Отключаем сжатие для стабильности
+                )
+                logger.info(f"[MarketWS] WebSocket connected successfully")
 
-            self.market_connection = {
-                'ws': ws,
-                'session': session,
-                'created_at': time.time(),
-                'last_ping': time.time(),
-                'reconnect_count': 0
-            }
+                self.market_connection = {
+                    'ws': ws,
+                    'session': session,
+                    'created_at': time.time(),
+                    'last_ping': time.time(),
+                    'reconnect_count': 0
+                }
+                logger.debug("[MarketWS] Market connection object created")
 
-            # Start ping loop
-            self.market_connection_task = asyncio.create_task(self.ping_loop(ws))
+                # НЕ запускаем ping loop - MEXC сам отправляет PING, мы отвечаем PONG
+                # self.market_connection_task = asyncio.create_task(self.ping_loop(ws))
 
-            # Subscribe to symbols if provided
-            if symbols:
-                # Небольшая задержка перед подпиской
-                await asyncio.sleep(0.5)
-                await self.subscribe_market_data(symbols)
-                await self.subscribe_bookticker_data(symbols)
-            elif self.market_subscriptions:
-                # Reuse existing subscriptions
-                await asyncio.sleep(0.5)
-                await self.subscribe_market_data(self.market_subscriptions)
-                await self.subscribe_bookticker_data(self.bookticker_subscriptions)
+                # Subscribe to symbols if provided
+                if symbols:
+                    logger.info(f"[MarketWS] Subscribing to provided symbols: {symbols}")
+                    # Небольшая задержка перед подпиской
+                    await asyncio.sleep(0.5)
+                    await self.subscribe_market_data(symbols)
+                    await self.subscribe_bookticker_data(symbols)
+                elif self.market_subscriptions:
+                    logger.info(f"[MarketWS] Reusing existing subscriptions: {self.market_subscriptions}")
+                    # Reuse existing subscriptions
+                    await asyncio.sleep(0.5)
+                    await self.subscribe_market_data(self.market_subscriptions)
+                    await self.subscribe_bookticker_data(self.bookticker_subscriptions)
 
-            # Start listening for messages
-            asyncio.create_task(self._listen_market_messages())
+                # Start listening for messages только если не запущен
+                if not self.market_listener_active:
+                    logger.debug("[MarketWS] Starting market message listener")
+                    self.market_listener_active = True
+                    asyncio.create_task(self._listen_market_messages())
 
-            logger.info("Connected to market data WebSocket")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error connecting to market data WebSocket: {e}")
-            # Cleanup on error
-            if 'session' in locals():
-                try:
-                    await session.close()
-                except:
-                    pass
-            return False
+                logger.info("Connected to market data WebSocket")
+                return True
+                    
+            except Exception as e:
+                logger.error(f"Error connecting to market data WebSocket: {e}")
+                # Cleanup on error
+                if 'session' in locals():
+                    try:
+                        await session.close()
+                        logger.debug("Cleaned up session after connection error")
+                    except Exception as cleanup_error:
+                        logger.debug(f"Error during session cleanup: {cleanup_error}")
+                return False
 
     async def subscribe_market_data(self, symbols: List[str]):
         """Subscribe to market data for specific symbols."""
         if not self.market_connection:
-            logger.error("Market connection not established")
+            logger.error("Market connection not established - cannot subscribe to market data")
+            logger.debug(f"Attempted to subscribe to symbols: {symbols}")
             return False
 
         try:
@@ -637,12 +669,14 @@ class MexcWebSocketManager:
             # spot@public.deals.v3.api@BTCUSDT
             params = [f"spot@public.deals.v3.api@{symbol.upper()}" for symbol in symbols]
 
-            # Send subscription request
+            # Send subscription request with unique ID for tracking
             subscription_msg = {
                 "method": "SUBSCRIPTION",
-                "params": params
+                "params": params,
+                "id": int(time.time() * 1000)  # Unique ID for tracking
             }
 
+            logger.info(f"[MarketWS] Sending market data subscription request: {subscription_msg}")
             await ws.send_str(json.dumps(subscription_msg))
 
             # Store subscriptions
@@ -668,12 +702,14 @@ class MexcWebSocketManager:
             # spot@public.bookTicker.v3.api@BTCUSDT
             params = [f"spot@public.bookTicker.v3.api@{symbol.upper()}" for symbol in symbols]
 
-            # Send subscription request
+            # Send subscription request with unique ID for tracking
             subscription_msg = {
                 "method": "SUBSCRIPTION",
-                "params": params
+                "params": params,
+                "id": int(time.time() * 1000)  # Unique ID for tracking
             }
 
+            logger.info(f"[MarketWS] Sending bookTicker subscription request: {subscription_msg}")
             await ws.send_str(json.dumps(subscription_msg))
 
             # Store bookTicker subscriptions
@@ -689,8 +725,15 @@ class MexcWebSocketManager:
         """Listen for messages from market data stream."""
         if not self.market_connection or not self.market_connection.get('ws'):
             logger.error("[MarketWS] Market connection or WebSocket not established for listening.")
+            self.market_listener_active = False
             return
 
+        # Проверяем, не запущен ли уже listener
+        if self.market_listener_active and hasattr(self, '_market_listener_started'):
+            logger.warning("[MarketWS] Market listener already active, avoiding duplicate")
+            return
+        
+        self._market_listener_started = True
         ws = self.market_connection['ws']
         logger.info(f"[MarketWS] Starting to listen for market messages")
         
@@ -718,11 +761,15 @@ class MexcWebSocketManager:
                         
                         # Обрабатываем control messages
                         if 'pong' in data:
+                            logger.debug(f"[MarketWS] Received PONG from server: {data}")
                             continue
                         if 'ping' in data:
                             try:
-                                await ws.send_json({"pong": data['ping']})
-                            except Exception:
+                                pong_response = {"pong": data['ping']}
+                                await ws.send_json(pong_response)
+                                logger.debug(f"[MarketWS] Received PING {data['ping']}, sent PONG")
+                            except Exception as e:
+                                logger.error(f"[MarketWS] Failed to send PONG: {e}")
                                 break
                             continue
                             
@@ -771,6 +818,10 @@ class MexcWebSocketManager:
         except Exception as e:
             logger.error(f"[MarketWS] Unexpected error in _listen_market_messages: {e}", exc_info=True)
         finally:
+            # Сбрасываем флаги активности
+            self.market_listener_active = False
+            if hasattr(self, '_market_listener_started'):
+                delattr(self, '_market_listener_started')
             # НЕ переподключаемся автоматически - это будет делать monitor_connections
             logger.info("[MarketWS] Market WebSocket listener stopped")
 
@@ -835,14 +886,10 @@ class MexcWebSocketManager:
                 # Cancel all tasks associated with this user
                 connection_data = self.user_connections[user_id]
 
-                # Cancel ping task
+                # Ping tasks больше не используются
                 if user_id in self.ping_tasks:
-                    try:
-                        self.ping_tasks[user_id].cancel()
-                    except Exception as e:
-                        logger.error(f"Error cancelling ping task for user {user_id}: {e}")
-                    finally:
-                        del self.ping_tasks[user_id]
+                    logger.debug(f"Removing ping task reference for user {user_id}")
+                    del self.ping_tasks[user_id]
 
                 # Cancel keep alive task and other tasks
                 if 'tasks' in connection_data:
@@ -916,13 +963,14 @@ class MexcWebSocketManager:
         """Disconnect from market data WebSocket."""
         if self.market_connection:
             try:
-                # Cancel ping task
-                if self.market_connection_task and not self.market_connection_task.done():
-                    self.market_connection_task.cancel()
-                    try:
-                        await asyncio.wait_for(self.market_connection_task, timeout=1.0)
-                    except (asyncio.TimeoutError, asyncio.CancelledError):
-                        pass
+                # Сбрасываем флаги активности
+                self.market_listener_active = False
+                if hasattr(self, '_market_listener_started'):
+                    delattr(self, '_market_listener_started')
+
+                # Market ping task больше не используется
+                if self.market_connection_task:
+                    logger.debug("Clearing market connection task reference")
                     self.market_connection_task = None
 
                 # Close WebSocket
@@ -948,6 +996,7 @@ class MexcWebSocketManager:
                 logger.error(f"Error disconnecting market WebSocket: {e}")
                 # Ensure cleanup even on error
                 self.market_connection = None
+                self.market_listener_active = False
 
     async def disconnect_all(self):
         """Disconnect all WebSocket connections."""
@@ -1085,6 +1134,12 @@ class MexcWebSocketManager:
                         await asyncio.sleep(1)
                         await self.connect_user_data_stream(user_id)
                 
+                # Автоматическая очистка сессий каждые 2 минуты
+                if int(current_time) % 120 == 0:  # Каждые 2 минуты
+                    cleanup_count = await self.force_cleanup_sessions()
+                    if cleanup_count > 0:
+                        logger.info(f"Automatic cleanup removed {cleanup_count} stale sessions")
+                
                 # Ждем 30 секунд перед следующей проверкой (более частые проверки)
                 await asyncio.sleep(30)
                 
@@ -1130,13 +1185,16 @@ class MexcWebSocketManager:
         logger.info("Starting force cleanup of all sessions")
         cleanup_count = 0
         
-        # Cleanup user sessions
+        # Cleanup user sessions - более агрессивно
         for user_id in list(self.user_connections.keys()):
             try:
                 connection_data = self.user_connections[user_id]
                 session = connection_data.get('session')
-                if session and session.closed:
-                    logger.info(f"Cleaning up closed session for user {user_id}")
+                ws = connection_data.get('ws')
+                
+                # Чистим если сессия закрыта ИЛИ WebSocket закрыт
+                if (session and session.closed) or (ws and ws.closed):
+                    logger.info(f"Cleaning up session for user {user_id} (session_closed={session.closed if session else 'None'}, ws_closed={ws.closed if ws else 'None'})")
                     await self.disconnect_user(user_id)
                     cleanup_count += 1
             except Exception as e:
@@ -1145,12 +1203,48 @@ class MexcWebSocketManager:
         # Cleanup market session if closed
         if self.market_connection:
             session = self.market_connection.get('session')
-            if session and session.closed:
-                logger.info("Cleaning up closed market session")
+            ws = self.market_connection.get('ws')
+            
+            if (session and session.closed) or (ws and ws.closed):
+                logger.info(f"Cleaning up market session (session_closed={session.closed if session else 'None'}, ws_closed={ws.closed if ws else 'None'})")
                 await self.disconnect_market()
                 cleanup_count += 1
         
         logger.info(f"Force cleanup completed, cleaned {cleanup_count} sessions")
+        return cleanup_count
+
+    async def emergency_session_cleanup(self):
+        """Экстренная очистка всех сессий - принудительно закрываем все."""
+        logger.warning("Starting EMERGENCY session cleanup")
+        cleanup_count = 0
+        
+        # Принудительно отключаем всех пользователей
+        user_ids = list(self.user_connections.keys())
+        for user_id in user_ids:
+            try:
+                await self.disconnect_user(user_id)
+                cleanup_count += 1
+                logger.info(f"Force disconnected user {user_id}")
+            except Exception as e:
+                logger.error(f"Error force disconnecting user {user_id}: {e}")
+        
+        # Принудительно отключаем market
+        if self.market_connection:
+            try:
+                await self.disconnect_market()
+                cleanup_count += 1
+                logger.info("Force disconnected market connection")
+            except Exception as e:
+                logger.error(f"Error force disconnecting market: {e}")
+        
+        # Сбрасываем все внутренние состояния
+        self.user_connections.clear()
+        self.ping_tasks.clear()
+        self.reconnecting_users.clear()
+        self.market_connection = None
+        self.market_listener_active = False
+        
+        logger.warning(f"Emergency cleanup completed, cleaned {cleanup_count} connections")
         return cleanup_count
 
     async def health_check(self):

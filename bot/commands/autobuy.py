@@ -858,11 +858,16 @@ async def periodic_resource_check(telegram_id: int):
 
             if not websocket_manager.market_connection:
                 logger.warning(f"Соединение с WebSocket для рынка потеряно, переподключаемся")
-                await websocket_manager.connect_market_data()
+                success = await websocket_manager.connect_market_data()
+                if not success:
+                    logger.error(f"Не удалось переподключиться к market WebSocket для {telegram_id}")
+                    return
 
             if symbol not in websocket_manager.market_subscriptions:
                 logger.warning(f"Подписка на {symbol} отсутствует, переподписываемся")
-                await websocket_manager.subscribe_market_data([symbol])
+                success = await websocket_manager.subscribe_market_data([symbol])
+                if not success:
+                    logger.error(f"Не удалось подписаться на {symbol} для {telegram_id}")
 
         except Exception as e:
             logger.error(f"Ошибка в periodic_resource_check для {telegram_id}: {e}")
