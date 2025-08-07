@@ -151,20 +151,39 @@ class MexcWebSocketManager:
 
     async def ping_loop(self, ws, user_id: Optional[int] = None):
         """Periodically send ping messages to keep the connection alive."""
+        connection_type = f"user {user_id}" if user_id else "market"
+        logger.debug(f"Starting ping loop for {connection_type}")
+        
         while (not self.is_shutting_down and
                ((user_id is not None and user_id in self.user_connections) or
                 (user_id is None and self.market_connection is not None))):
             try:
-                # Проверяем, что соединение еще открыто перед отправкой ping
+                # Проверяем состояние соединения перед отправкой ping
                 if ws.closed:
-                    logger.warning(f"WebSocket closed in ping loop for {'user ' + str(user_id) if user_id else 'market'}")
+                    logger.debug(f"WebSocket closed in ping loop for {connection_type}")
+                    break
+                
+                # Проверяем closing только если атрибут существует
+                if hasattr(ws, 'closing') and ws.closing:
+                    logger.debug(f"WebSocket closing in ping loop for {connection_type}")
+                    break
+                
+                # Дополнительная проверка на закрытое соединение
+                if hasattr(ws, '_transport') and ws._transport and hasattr(ws._transport, 'is_closing') and ws._transport.is_closing():
+                    logger.debug(f"Transport is closing for {connection_type}")
                     break
                 
                 await self.send_ping(ws)
                 await asyncio.sleep(20)  # Send ping every 20 seconds
-            except Exception as e:
-                logger.error(f"Error in ping loop for {'user ' + str(user_id) if user_id else 'market'}: {e}")
+                
+            except (ConnectionResetError, ConnectionAbortedError, OSError) as e:
+                logger.debug(f"Connection error in ping loop for {connection_type}: {e}")
                 break
+            except Exception as e:
+                logger.error(f"Unexpected error in ping loop for {connection_type}: {e}")
+                break
+        
+        logger.debug(f"Ping loop stopped for {connection_type}")
 
     async def handle_market_message(self, message: dict):
         """Handle incoming market data messages."""
@@ -333,84 +352,95 @@ class MexcWebSocketManager:
 
     async def connect_user_data_stream(self, user_id: int) -> bool:
         """Connect to user data stream for a specific user."""
-        # Если пользователь уже в процессе переподключения, просто ждем и возвращаем True
+        # Проверяем, не идет ли уже процесс переподключения
         if user_id in self.reconnecting_users:
-            logger.info(f"User {user_id} is already in reconnection process. Skipping.")
-            await asyncio.sleep(0.5)  # Небольшая задержка для завершения текущего процесса переподключения
+            logger.debug(f"User {user_id} is already in reconnection process. Skipping.")
             return True
 
         # Добавляем пользователя в список переподключающихся
         self.reconnecting_users.add(user_id)
 
         try:
-            # Сначала отключаем существующее соединение
+            # Отключаем существующее соединение
             if user_id in self.user_connections:
                 await self.disconnect_user(user_id)
-                # Небольшая задержка перед повторным подключением
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
 
             user = await User.objects.aget(telegram_id=user_id)
 
             if not user.api_key or not user.api_secret:
                 logger.warning(f"User {user_id} missing API keys")
-                self.reconnecting_users.remove(user_id)
                 return False
 
-            # Get a listen key for the user
+            # Получаем listen key
             success, error_message, listen_key = await self.get_listen_key(user.api_key, user.api_secret)
             if not success:
-                logger.error(f"Error connecting user {user_id} to WebSocket: {error_message}")
-                self.reconnecting_users.remove(user_id)
+                logger.error(f"Error getting listen key for user {user_id}: {error_message}")
                 return False
 
             ws_url = f"{self.BASE_URL}?listenKey={listen_key}"
 
-            # Create WebSocket connection with proper session management
-            session = aiohttp.ClientSession()
+            # Создаем сессию с оптимизированными настройками
+            timeout = aiohttp.ClientTimeout(total=30)
+            session = aiohttp.ClientSession(
+                timeout=timeout,
+                connector=aiohttp.TCPConnector(
+                    limit=50,
+                    limit_per_host=10,
+                    keepalive_timeout=30,
+                    enable_cleanup_closed=True
+                )
+            )
+            
             try:
-                ws = await session.ws_connect(ws_url)
+                ws = await session.ws_connect(
+                    ws_url,
+                    heartbeat=20,
+                    compress=False
+                )
             except Exception as e:
                 await session.close()
-                logger.error(f"Error connecting to WebSocket for user {user_id}: {e}")
-                self.reconnecting_users.remove(user_id)
+                logger.error(f"Error connecting WebSocket for user {user_id}: {e}")
                 return False
 
-            # Store connection info
+            # Сохраняем информацию о соединении
             self.user_connections[user_id] = {
                 'ws': ws,
                 'session': session,
                 'listen_key': listen_key,
-                'tasks': [],  # Список для хранения задач
-                'created_at': time.time()  # Добавляем время создания для отслеживания
+                'tasks': [],
+                'created_at': time.time(),
+                'reconnect_count': 0
             }
 
-            # Start ping loop to keep connection alive
+            # Запускаем ping loop
             ping_task = asyncio.create_task(self.ping_loop(ws, user_id))
             self.ping_tasks[user_id] = ping_task
             self.user_connections[user_id]['tasks'].append(ping_task)
 
-            # Start task to keep listen key alive
+            # Запускаем keep alive для listen key
             keep_alive_task = asyncio.create_task(
                 self.keep_listen_key_alive(user_id, user.api_key, user.api_secret)
             )
-            self.user_connections[user_id]['keep_alive_task'] = keep_alive_task
             self.user_connections[user_id]['tasks'].append(keep_alive_task)
 
-            # Start listening for messages
+            # Запускаем прослушивание сообщений
             listen_task = asyncio.create_task(self._listen_user_messages(user_id))
             self.user_connections[user_id]['tasks'].append(listen_task)
 
-            # После успешного подключения подписываемся на ордера
+            # Подписываемся на ордера с задержкой
+            await asyncio.sleep(0.5)
             await self.subscribe_user_orders(user_id)
 
-            logger.info(f"Connected user {user_id} to WebSocket and subscribed to orders")
-            self.reconnecting_users.remove(user_id)
+            logger.info(f"Connected user {user_id} to WebSocket")
             return True
+            
         except Exception as e:
             logger.error(f"Error connecting user {user_id} to WebSocket: {e}")
-            if user_id in self.reconnecting_users:
-                self.reconnecting_users.remove(user_id)
             return False
+        finally:
+            # Всегда убираем из списка переподключающихся
+            self.reconnecting_users.discard(user_id)
 
     async def _listen_user_messages(self, user_id: int):
         """Listen for messages from user data stream."""
@@ -521,30 +551,45 @@ class MexcWebSocketManager:
         except Exception as e:
             logger.error(f"Error in user WebSocket for {user_id}: {e}")
         finally:
-            # Connection is closed, try to reconnect after a delay if we're not shutting down
-            # and the user is not already being reconnected
-            if not self.is_shutting_down and user_id not in self.reconnecting_users:
-                logger.info(f"Reconnecting user {user_id} WebSocket in {self.reconnect_delay} seconds")
-                await asyncio.sleep(self.reconnect_delay)
-                self.reconnect_delay = min(self.reconnect_delay * 2, 60)  # Exponential backoff
-
-                # Если пользователь еще в соединениях, пробуем переподключить
-                if user_id in self.user_connections:
-                    asyncio.create_task(self.connect_user_data_stream(user_id))
+            # НЕ переподключаемся автоматически из этого места
+            # Пусть monitor_connections управляет переподключениями
+            logger.info(f"User {user_id} WebSocket listener stopped")
 
     async def connect_market_data(self, symbols: List[str] = None):
         """
         Connect to market data stream and subscribe to specified symbols.
         If no symbols are provided, will use existing subscriptions.
         """
+        # Если уже есть активное соединение, отключаем его
+        if self.market_connection:
+            await self.disconnect_market()
+            await asyncio.sleep(0.5)  # Небольшая пауза
+
         try:
-            session = aiohttp.ClientSession()
-            ws = await session.ws_connect(self.BASE_URL)
+            # Создаем новую сессию с правильными настройками
+            timeout = aiohttp.ClientTimeout(total=30)
+            session = aiohttp.ClientSession(
+                timeout=timeout,
+                connector=aiohttp.TCPConnector(
+                    limit=100,
+                    limit_per_host=30,
+                    keepalive_timeout=30,
+                    enable_cleanup_closed=True
+                )
+            )
+            
+            ws = await session.ws_connect(
+                self.BASE_URL,
+                heartbeat=20,  # Автоматический heartbeat
+                compress=False  # Отключаем сжатие для стабильности
+            )
 
             self.market_connection = {
                 'ws': ws,
                 'session': session,
-                'created_at': time.time()  # Добавляем время создания для отслеживания
+                'created_at': time.time(),
+                'last_ping': time.time(),
+                'reconnect_count': 0
             }
 
             # Start ping loop
@@ -552,11 +597,13 @@ class MexcWebSocketManager:
 
             # Subscribe to symbols if provided
             if symbols:
+                # Небольшая задержка перед подпиской
+                await asyncio.sleep(0.5)
                 await self.subscribe_market_data(symbols)
-                # Также подписываемся на bookTicker для тех же символов
                 await self.subscribe_bookticker_data(symbols)
             elif self.market_subscriptions:
                 # Reuse existing subscriptions
+                await asyncio.sleep(0.5)
                 await self.subscribe_market_data(self.market_subscriptions)
                 await self.subscribe_bookticker_data(self.bookticker_subscriptions)
 
@@ -565,8 +612,15 @@ class MexcWebSocketManager:
 
             logger.info("Connected to market data WebSocket")
             return True
+            
         except Exception as e:
             logger.error(f"Error connecting to market data WebSocket: {e}")
+            # Cleanup on error
+            if 'session' in locals():
+                try:
+                    await session.close()
+                except:
+                    pass
             return False
 
     async def subscribe_market_data(self, symbols: List[str]):
@@ -638,89 +692,87 @@ class MexcWebSocketManager:
             return
 
         ws = self.market_connection['ws']
-        logger.info(f"[MarketWS] Starting to listen for market messages on: {ws}")
+        logger.info(f"[MarketWS] Starting to listen for market messages")
+        
+        # Сбрасываем delay при успешном старте
+        self.reconnect_delay = 1
 
         try:
             while not self.is_shutting_down and self.market_connection and not ws.closed:
                 try:
-                    msg = await ws.receive(timeout=30) # Добавляем таймаут для периодической проверки ws.closed
+                    msg = await ws.receive(timeout=30)
                 except asyncio.TimeoutError:
-                    logger.debug(f"[MarketWS] Timeout receiving message, checking connection.")
+                    # При таймауте просто проверяем состояние и продолжаем
                     if ws.closed:
                         logger.warning("[MarketWS] WebSocket closed during receive timeout.")
                         break
-                    # Если не закрыто, отправляем пинг для поддержания активности, если необходимо
-                    try:
-                        await self.send_ping(ws)
-                    except Exception as e:
-                        logger.error(f"[MarketWS] Error sending ping during timeout: {e}")
-                        break
+                    # Отправляем ping только если прошло достаточно времени
                     continue
+                except Exception as e:
+                    logger.error(f"[MarketWS] Error receiving message: {e}")
+                    break
 
-                if msg:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        logger.debug(f"[MarketWS] Received TEXT message: {msg.data[:200]}...") # Уменьшаем логирование
-                        try:
-                            data = json.loads(msg.data)
-                        except json.JSONDecodeError as e:
-                            logger.error(f"[MarketWS] JSONDecodeError: {e} for data: {msg.data[:500]}")
-                            continue
-
-                        # Check for PONG response or other control messages
+                if msg.type == aiohttp.WSMsgType.TEXT:
+                    try:
+                        data = json.loads(msg.data)
+                        
+                        # Обрабатываем control messages
                         if 'pong' in data:
-                            logger.debug(f"[MarketWS] Received PONG: {data}")
                             continue
-                        if 'ping' in data: # Сервер может прислать ping
-                            logger.debug(f"[MarketWS] Received PING from server: {data}, sending PONG.")
+                        if 'ping' in data:
                             try:
                                 await ws.send_json({"pong": data['ping']})
-                            except Exception as e:
-                                logger.error(f"[MarketWS] Error sending PONG: {e}")
+                            except Exception:
+                                break
                             continue
-                        # Проверяем ответ на подписку и другие ошибки тут, до передачи в handle_market_message
-                        if data.get("method") == "SUBSCRIPTION" and data.get("code") == 0:
-                            logger.info(f"[MarketWS] Subscription successful in _listen_market_messages: {data}")
-                            continue # Это сообщение об успешной подписке, не передаем его в handle_market_message
-                        if data.get("code") != 0 and data.get("msg"):
-                             logger.error(f"[MarketWS] Received error message from MEXC in _listen_market_messages: {data}")
-                             continue # Это сообщение об ошибке, не передаем его в handle_market_message
+                            
+                        # Обрабатываем ответы на подписку
+                        if data.get("method") == "SUBSCRIPTION":
+                            if data.get("code") == 0:
+                                logger.info(f"[MarketWS] Subscription successful: {data.get('params', [])}")
+                            else:
+                                logger.error(f"[MarketWS] Subscription failed: {data}")
+                            continue
+                            
+                        # Обрабатываем ошибки
+                        if data.get("code") is not None and data.get("code") != 0:
+                            logger.error(f"[MarketWS] Received error from MEXC: {data}")
+                            continue
 
-                        # Process market data
-                        logger.debug(f"[MarketWS] Processing market data: {data}")  # Уменьшаем логирование
+                        # Обрабатываем market data
                         await self.handle_market_message(data)
+                        
+                    except json.JSONDecodeError as e:
+                        logger.error(f"[MarketWS] JSON decode error: {e}")
+                        continue
+                    except Exception as e:
+                        logger.error(f"[MarketWS] Error processing message: {e}")
+                        continue
 
-                    elif msg.type == aiohttp.WSMsgType.CLOSED:
-                        logger.warning(f"[MarketWS] WebSocket CLOSED message received. Reason: {ws.close_code}")
-                        break
+                elif msg.type == aiohttp.WSMsgType.CLOSED:
+                    logger.info(f"[MarketWS] WebSocket closed normally. Code: {ws.close_code}")
+                    break
 
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        logger.error(f"[MarketWS] WebSocket ERROR message received: {ws.exception()}")
-                        break
-                    elif msg.type == aiohttp.WSMsgType.CLOSING:
-                        logger.info("[MarketWS] WebSocket CLOSING message received.")
-                        # Не выходим сразу, даем время на корректное закрытие
-                        await asyncio.sleep(1)
+                elif msg.type == aiohttp.WSMsgType.ERROR:
+                    logger.error(f"[MarketWS] WebSocket error: {ws.exception()}")
+                    break
+                    
+                elif msg.type == aiohttp.WSMsgType.CLOSING:
+                    logger.info("[MarketWS] WebSocket is closing, waiting for clean shutdown...")
+                    # Ждем чистое закрытие максимум 5 секунд
+                    for i in range(50):
                         if ws.closed:
                             break
-                    else:
-                        logger.debug(f"[MarketWS] Received other message type: {msg.type}")
-                else:
-                    # msg is None, может произойти если соединение закрывается
-                    logger.warning("[MarketWS] Received None message, WebSocket might be closing.")
-                    if ws.closed:
-                         break # Выходим если сокет уже закрыт
-                    await asyncio.sleep(0.1) # Небольшая пауза
+                        await asyncio.sleep(0.1)
+                    break
+                    
+        except (asyncio.CancelledError, GeneratorExit):
+            logger.info("[MarketWS] Market listener task cancelled")
         except Exception as e:
-            logger.error(f"[MarketWS] Error in _listen_market_messages: {e}", exc_info=True)
+            logger.error(f"[MarketWS] Unexpected error in _listen_market_messages: {e}", exc_info=True)
         finally:
-            logger.warning("[MarketWS] Exited _listen_market_messages loop.")
-            # Connection is closed, try to reconnect after a delay
-            if not self.is_shutting_down:
-                logger.info(f"Reconnecting market WebSocket in {self.reconnect_delay} seconds")
-                await asyncio.sleep(self.reconnect_delay)
-                self.reconnect_delay = min(self.reconnect_delay * 2, 60)  # Exponential backoff
-                await self.disconnect_market()
-                await self.connect_market_data()
+            # НЕ переподключаемся автоматически - это будет делать monitor_connections
+            logger.info("[MarketWS] Market WebSocket listener stopped")
 
     async def register_price_callback(self, symbol: str, callback: Callable[[str, Any], None]):
         """Register a callback function for price updates."""
@@ -864,16 +916,38 @@ class MexcWebSocketManager:
         """Disconnect from market data WebSocket."""
         if self.market_connection:
             try:
-                if self.market_connection_task:
+                # Cancel ping task
+                if self.market_connection_task and not self.market_connection_task.done():
                     self.market_connection_task.cancel()
+                    try:
+                        await asyncio.wait_for(self.market_connection_task, timeout=1.0)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        pass
                     self.market_connection_task = None
 
-                await self.market_connection['ws'].close()
-                await self.market_connection['session'].close()
+                # Close WebSocket
+                ws = self.market_connection.get('ws')
+                if ws and not ws.closed:
+                    try:
+                        await ws.close()
+                    except Exception as e:
+                        logger.debug(f"Error closing market WebSocket: {e}")
+
+                # Close session
+                session = self.market_connection.get('session')
+                if session and not session.closed:
+                    try:
+                        await session.close()
+                    except Exception as e:
+                        logger.debug(f"Error closing market session: {e}")
+
                 self.market_connection = None
                 logger.info("Disconnected from market data WebSocket")
+                
             except Exception as e:
                 logger.error(f"Error disconnecting market WebSocket: {e}")
+                # Ensure cleanup even on error
+                self.market_connection = None
 
     async def disconnect_all(self):
         """Disconnect all WebSocket connections."""
@@ -949,37 +1023,74 @@ class MexcWebSocketManager:
 
     async def monitor_connections(self):
         """Monitor and clean up stale connections."""
+        logger.info("Starting connection monitor")
+        market_failure_count = 0
+        max_failures = 5
+        
         while not self.is_shutting_down:
             try:
                 current_time = time.time()
                 
-                # Проверяем пользовательские соединения
+                # Проверяем market соединение
+                if self.market_connection:
+                    market_created = self.market_connection.get('created_at', 0)
+                    
+                    # Проверяем, не закрыто ли соединение
+                    ws = self.market_connection.get('ws')
+                    if ws and ws.closed:
+                        logger.warning("Market WebSocket is closed, reconnecting...")
+                        await self.disconnect_market()
+                        await asyncio.sleep(2)
+                        
+                        if market_failure_count < max_failures:
+                            success = await self.connect_market_data()
+                            if success:
+                                market_failure_count = 0
+                            else:
+                                market_failure_count += 1
+                        else:
+                            logger.error("Market WebSocket failed too many times, waiting longer...")
+                            await asyncio.sleep(60)
+                            market_failure_count = 0
+                    
+                    # Проверяем возраст соединения (30 минут)
+                    elif current_time - market_created > 1800:
+                        logger.info("Market connection is stale, reconnecting...")
+                        await self.disconnect_market()
+                        await asyncio.sleep(2)
+                        await self.connect_market_data()
+                        
+                elif self.market_subscriptions:
+                    # Если есть подписки, но нет соединения - пробуем переподключиться
+                    logger.info("No market connection but have subscriptions, reconnecting...")
+                    if market_failure_count < max_failures:
+                        success = await self.connect_market_data()
+                        if success:
+                            market_failure_count = 0
+                        else:
+                            market_failure_count += 1
+                    else:
+                        await asyncio.sleep(60)
+                        market_failure_count = 0
+                
+                # Проверяем пользовательские соединения (менее агрессивно)
                 for user_id in list(self.user_connections.keys()):
                     connection_data = self.user_connections[user_id]
                     created_at = connection_data.get('created_at', 0)
                     
-                    # Если соединение старше 30 минут, переподключаем
-                    if current_time - created_at > 1800:  # 30 minutes
-                        logger.info(f"Connection for user {user_id} is stale, reconnecting...")
+                    # Проверяем только очень старые соединения (2 часа)
+                    if current_time - created_at > 7200:  # 2 hours
+                        logger.info(f"Connection for user {user_id} is very stale, reconnecting...")
                         await self.disconnect_user(user_id)
                         await asyncio.sleep(1)
                         await self.connect_user_data_stream(user_id)
                 
-                # Проверяем market соединение
-                if self.market_connection:
-                    market_created = getattr(self.market_connection, 'created_at', 0)
-                    if current_time - market_created > 1800:
-                        logger.info("Market connection is stale, reconnecting...")
-                        await self.disconnect_market()
-                        await asyncio.sleep(1)
-                        await self.connect_market_data()
-                
-                # Ждем 5 минут перед следующей проверкой
-                await asyncio.sleep(300)
+                # Ждем 30 секунд перед следующей проверкой (более частые проверки)
+                await asyncio.sleep(30)
                 
             except Exception as e:
                 logger.error(f"Error in connection monitor: {e}")
-                await asyncio.sleep(60)
+                await asyncio.sleep(30)
 
     async def get_connection_stats(self):
         """Get statistics about current connections."""
@@ -992,16 +1103,94 @@ class MexcWebSocketManager:
         
         # Подсчитываем активные сессии
         session_count = 0
+        closed_sessions = 0
+        
         for connection_data in self.user_connections.values():
-            if 'session' in connection_data and not connection_data['session'].closed:
-                session_count += 1
+            if 'session' in connection_data:
+                if connection_data['session'].closed:
+                    closed_sessions += 1
+                else:
+                    session_count += 1
         
         if self.market_connection and 'session' in self.market_connection:
-            if not self.market_connection['session'].closed:
+            if self.market_connection['session'].closed:
+                closed_sessions += 1
+            else:
                 session_count += 1
         
         stats['active_sessions'] = session_count
+        stats['closed_sessions'] = closed_sessions
+        stats['total_market_subscriptions'] = len(self.market_subscriptions)
+        stats['total_bookticker_subscriptions'] = len(self.bookticker_subscriptions)
+        
         return stats
+
+    async def force_cleanup_sessions(self):
+        """Force cleanup all sessions to prevent resource leaks."""
+        logger.info("Starting force cleanup of all sessions")
+        cleanup_count = 0
+        
+        # Cleanup user sessions
+        for user_id in list(self.user_connections.keys()):
+            try:
+                connection_data = self.user_connections[user_id]
+                session = connection_data.get('session')
+                if session and session.closed:
+                    logger.info(f"Cleaning up closed session for user {user_id}")
+                    await self.disconnect_user(user_id)
+                    cleanup_count += 1
+            except Exception as e:
+                logger.error(f"Error cleaning up user {user_id} session: {e}")
+        
+        # Cleanup market session if closed
+        if self.market_connection:
+            session = self.market_connection.get('session')
+            if session and session.closed:
+                logger.info("Cleaning up closed market session")
+                await self.disconnect_market()
+                cleanup_count += 1
+        
+        logger.info(f"Force cleanup completed, cleaned {cleanup_count} sessions")
+        return cleanup_count
+
+    async def health_check(self):
+        """Perform health check on all connections."""
+        health_stats = {
+            'healthy_user_connections': 0,
+            'unhealthy_user_connections': 0,
+            'market_connection_healthy': False,
+            'total_sessions': 0,
+            'issues': []
+        }
+        
+        # Check user connections
+        for user_id, connection_data in self.user_connections.items():
+            ws = connection_data.get('ws')
+            session = connection_data.get('session')
+            
+            if ws and not ws.closed and session and not session.closed:
+                health_stats['healthy_user_connections'] += 1
+            else:
+                health_stats['unhealthy_user_connections'] += 1
+                health_stats['issues'].append(f"User {user_id} has unhealthy connection")
+            
+            if session:
+                health_stats['total_sessions'] += 1
+        
+        # Check market connection
+        if self.market_connection:
+            ws = self.market_connection.get('ws')
+            session = self.market_connection.get('session')
+            
+            if ws and not ws.closed and session and not session.closed:
+                health_stats['market_connection_healthy'] = True
+            else:
+                health_stats['issues'].append("Market connection is unhealthy")
+            
+            if session:
+                health_stats['total_sessions'] += 1
+        
+        return health_stats
 
 
 # Create a singleton instance that will be imported and used throughout the application
