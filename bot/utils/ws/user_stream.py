@@ -45,6 +45,7 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                     ]
                 ):
                     # logger.info(f"[UserWS] 📨 Received message for user {user_id}: {data}")
+                    pass
 
                 if data.get("msg") == "PONG":
                     # logger.warning(f"[UserWS] 🏓 Received PONG response for user {user_id}: {data}")
