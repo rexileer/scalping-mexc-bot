@@ -14,6 +14,11 @@ from bot.utils.ws.price_direction import PriceDirectionTracker
 from bot.utils.ws.market_stream import handle_market_message_impl
 from bot.utils.ws.market_stream import listen_market_messages_impl
 from bot.utils.ws.user_stream import listen_user_messages_impl
+from bot.utils.ws.subscriptions import subscribe_market_data as _subscribe_market_data
+from bot.utils.ws.subscriptions import subscribe_bookticker_data as _subscribe_bookticker_data
+from bot.utils.ws.subscriptions import subscribe_user_orders as _subscribe_user_orders
+from bot.utils.ws.ping import ping_market_loop as _ping_market_loop
+from bot.utils.ws.ping import ping_user_loop as _ping_user_loop
 
 
 class MexcWebSocketManager:
@@ -402,70 +407,11 @@ class MexcWebSocketManager:
 
     async def subscribe_market_data(self, symbols: List[str]):
         """Subscribe to market data for specific symbols."""
-        if not self.market_connection:
-            logger.error("Market connection not established - cannot subscribe to market data")
-            logger.debug(f"Attempted to subscribe to symbols: {symbols}")
-            return False
-
-        try:
-            ws = self.market_connection['ws']
-
-            # Format subscription parameters for each symbol
-            # According to MEXC documentation, the format for deals is:
-            # spot@public.deals.v3.api@BTCUSDT
-            params = [f"spot@public.aggre.deals.v3.api.pb@100ms@{symbol.upper()}" for symbol in symbols]
-
-            # Send subscription request with unique ID for tracking
-            subscription_msg = {
-                "method": "SUBSCRIPTION",
-                "params": params,
-                "id": int(time.time() * 1000)  # Unique ID for tracking
-            }
-
-            logger.info(f"[MarketWS] Sending market data subscription request: {subscription_msg}")
-            await ws.send_str(json.dumps(subscription_msg))
-
-            # Store subscriptions
-            self.market_subscriptions = list(set(self.market_subscriptions + symbols))
-
-            logger.info(f"Subscribed to market data for: {symbols}")
-            return True
-        except Exception as e:
-            logger.error(f"Error subscribing to market data: {e}")
-            return False
+        return await _subscribe_market_data(self, symbols)
 
     async def subscribe_bookticker_data(self, symbols: List[str]):
         """Subscribe to bookTicker data for specific symbols to get best bid/ask prices."""
-        if not self.market_connection:
-            logger.error("Market connection not established for bookTicker subscription")
-            return False
-
-        try:
-            ws = self.market_connection['ws']
-
-            # Format subscription parameters for each symbol
-            # According to MEXC documentation, the format for bookTicker is:
-            # spot@public.bookTicker.v3.api@BTCUSDT
-            params = [f"spot@public.aggre.bookTicker.v3.api.pb@100ms@{symbol.upper()}" for symbol in symbols]
-
-            # Send subscription request with unique ID for tracking
-            subscription_msg = {
-                "method": "SUBSCRIPTION",
-                "params": params,
-                "id": int(time.time() * 1000)  # Unique ID for tracking
-            }
-
-            logger.info(f"[MarketWS] Sending bookTicker subscription request: {subscription_msg}")
-            await ws.send_str(json.dumps(subscription_msg))
-
-            # Store bookTicker subscriptions
-            self.bookticker_subscriptions = list(set(self.bookticker_subscriptions + symbols))
-
-            logger.info(f"Subscribed to bookTicker data for: {symbols}")
-            return True
-        except Exception as e:
-            logger.error(f"Error subscribing to bookTicker data: {e}")
-            return False
+        return await _subscribe_bookticker_data(self, symbols)
 
     async def _listen_market_messages(self):
         """Listen for messages from market data stream."""
@@ -473,49 +419,11 @@ class MexcWebSocketManager:
 
     async def _ping_market_loop(self, ws):
         """Отправляет PING каждые 30 секунд для поддержания market соединения"""
-        try:
-            while not ws.closed and not self.is_shutting_down:
-                await asyncio.sleep(30)  # Пинг каждые 30 секунд (MEXC дисконнектит через 60)
-
-                if ws.closed or self.is_shutting_down:
-                    break
-
-                try:
-                    # Используем официальный формат MEXC согласно документации
-                    ping_message = {"method": "PING"}
-                    await ws.send_json(ping_message)
-                    # logger.info(f"[MarketWS] 📡 Sent PING (official format)")
-                except Exception as e:
-                    logger.error(f"[MarketWS] Failed to send PING: {e}")
-                    break
-
-        except asyncio.CancelledError:
-            logger.debug("[MarketWS] Ping loop cancelled")
-        except Exception as e:
-            logger.error(f"[MarketWS] Ping loop error: {e}")
+        await _ping_market_loop(ws)
 
     async def _ping_user_loop(self, ws, user_id: int):
         """Отправляет PING каждые 30 секунд для поддержания user соединения"""
-        try:
-            while not ws.closed and not self.is_shutting_down and user_id in self.user_connections:
-                await asyncio.sleep(30)  # Пинг каждые 30 секунд (MEXC дисконнектит через 60)
-
-                if ws.closed or self.is_shutting_down or user_id not in self.user_connections:
-                    break
-
-                try:
-                    # Используем официальный формат MEXC согласно документации
-                    ping_message = {"method": "PING"}
-                    await ws.send_str(json.dumps(ping_message))
-                    # logger.info(f"[UserWS] 📡 Sent PING (official format) to user {user_id}")
-                except Exception as e:
-                    logger.error(f"[UserWS] Failed to send PING to user {user_id}: {e}")
-                    break
-
-        except asyncio.CancelledError:
-            logger.debug(f"[UserWS] Ping loop cancelled for user {user_id}")
-        except Exception as e:
-            logger.error(f"[UserWS] Ping loop error for user {user_id}: {e}")
+        await _ping_user_loop(ws, user_id)
 
     async def register_price_callback(self, symbol: str, callback: Callable[[str, Any], None]):
         """Register a callback function for price updates."""
@@ -723,44 +631,7 @@ class MexcWebSocketManager:
             await self.connect_user_data_stream(user.telegram_id)
 
     async def subscribe_user_orders(self, user_id: int, symbol: str = None):
-        """
-        Подписка на обновления ордеров пользователя.
-        """
-        if user_id not in self.user_connections:
-            logger.warning(f"Невозможно подписаться: нет соединения для пользователя {user_id}")
-            return False
-
-        try:
-            ws = self.user_connections[user_id]['ws']
-
-            # Для пользовательских данных через listenKey
-            # не нужно указывать конкретный символ - сервер сам
-            # будет отправлять все обновления ордеров пользователя
-            params = [
-                "spot@private.orders.v3.api.pb",     # все ордера пользователя
-                "spot@private.account.v3.api.pb"     # данные аккаунта
-            ]
-
-            # Отправляем запрос на подписку
-            subscription_msg = {
-                "method": "SUBSCRIPTION",
-                "params": params,
-                "id": int(time.time() * 1000)  # уникальный ID для запроса
-            }
-
-            await ws.send_str(json.dumps(subscription_msg))
-            logger.info(f"Отправлен запрос на подписку для пользователя {user_id}: {params}")
-
-            # Сохраняем информацию о подписке
-            if 'subscriptions' not in self.user_connections[user_id]:
-                self.user_connections[user_id]['subscriptions'] = []
-
-            self.user_connections[user_id]['subscriptions'].extend(params)
-
-            return True
-        except Exception as e:
-            logger.error(f"Ошибка при подписке на обновления ордеров пользователя {user_id}: {e}")
-            return False
+        return await _subscribe_user_orders(self, user_id, symbol)
 
     async def monitor_connections(self):
         """Monitor and clean up stale connections."""
