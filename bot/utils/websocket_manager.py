@@ -137,7 +137,15 @@ class MexcWebSocketManager:
                     async with session.put(request_url, headers=headers) as response:
                         if response.status != 200:
                             error_text = await response.text()
-                            logger.error(f"Failed to extend listen key: {error_text}")
+                            logger.error(f"Failed to extend listen key for user {user_id}: {error_text}")
+                            # Переподключаем конкретного пользователя — его listenKey истек или недействителен
+                            try:
+                                await self.disconnect_user(user_id)
+                                await asyncio.sleep(1)
+                                await self.connect_user_data_stream(user_id)
+                            except Exception as e:
+                                logger.error(f"Error reconnecting user {user_id} after listen key failure: {e}")
+                            return
 
                 # MEXC documentation says listen keys are valid for 60 minutes
                 # we'll refresh every 45 minutes to be safe
@@ -206,7 +214,7 @@ class MexcWebSocketManager:
     def get_price_direction(self, symbol: str) -> Dict[str, Any]:
         """
         Возвращает информацию о направлении цены для символа.
-
+        
         Returns:
             Dict с ключами:
             - is_rise: bool - текущее направление (True = рост, False = падение)
@@ -357,7 +365,7 @@ class MexcWebSocketManager:
                     heartbeat=None,
                     compress=False  # Отключаем сжатие для стабильности
                 )
-                logger.info(f"[MarketWS] WebSocket connected successfully")
+                logger.info("[MarketWS] WebSocket connected successfully")
 
                 self.market_connection = {
                     'ws': ws,
@@ -757,7 +765,9 @@ class MexcWebSocketManager:
 
                 # Чистим если сессия закрыта ИЛИ WebSocket закрыт
                 if (session and session.closed) or (ws and ws.closed):
-                    logger.info(f"Cleaning up session for user {user_id} (session_closed={session.closed if session else 'None'}, ws_closed={ws.closed if ws else 'None'})")
+                    logger.info(
+                        f"Cleaning up session for user {user_id} (session_closed={session.closed if session else 'None'}, ws_closed={ws.closed if ws else 'None'})"
+                    )
                     await self.disconnect_user(user_id)
                     cleanup_count += 1
             except Exception as e:

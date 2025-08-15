@@ -14,6 +14,11 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
 
     ws = manager.user_connections[user_id]['ws']
     ping_task = asyncio.create_task(manager._ping_user_loop(ws, user_id))
+    # Инициализируем отметку последнего сообщения для детектора "немых" соединений
+    try:
+        manager.user_connections[user_id]['last_message_at'] = time.time()
+    except Exception:
+        pass
 
     try:
         from bot.utils.websocket_handlers import update_order_status
@@ -52,7 +57,17 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                     continue
 
                 if 'id' in data and 'code' in data:
-                    logger.debug(f"Сервисное сообщение для {user_id}: {data}")
+                    # Логируем ACK подписки/ошибки сервиса
+                    if data.get('code') == 0:
+                        logger.info(f"[UserWS] Subscription ACK for user {user_id}: {data}")
+                    else:
+                        logger.warning(f"[UserWS] Service error for user {user_id}: {data}")
+                        # При ошибке подписки пробуем переподписаться
+                        try:
+                            from bot.utils.ws.subscriptions import subscribe_user_orders
+                            await subscribe_user_orders(manager, user_id)
+                        except Exception as e:
+                            logger.error(f"[UserWS] Resubscribe failed for user {user_id}: {e}")
                     continue
 
                 if 'pong' in data:
@@ -75,6 +90,7 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                 logger.debug(f"User {user_id} received message on channel: {channel}")
 
                 if channel == "spot@private.orders.v3.api.pb":
+                    manager.user_connections[user_id]['last_message_at'] = time.time()
                     order_data = data.get('d', {})
                     symbol = data.get('s')
                     order_id = order_data.get('i')
@@ -93,6 +109,7 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                         logger.error(f"Ошибка обновления статуса ордера: {e}")
 
                 elif channel == "spot@private.account.v3.api.pb":
+                    manager.user_connections[user_id]['last_message_at'] = time.time()
                     account_data = data.get('d', {})
                     asset = account_data.get('a')
                     free = account_data.get('f')
@@ -118,6 +135,7 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                 logger.debug(f"User {user_id} received message on channel: {channel}")
 
                 if channel == "spot@private.orders.v3.api.pb":
+                    manager.user_connections[user_id]['last_message_at'] = time.time()
                     order_data = data.get('d', {})
                     symbol = data.get('s')
                     order_id = order_data.get('i')
@@ -133,6 +151,7 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                         logger.error(f"Ошибка обновления статуса ордера: {e}")
 
                 elif channel == "spot@private.account.v3.api.pb":
+                    manager.user_connections[user_id]['last_message_at'] = time.time()
                     account_data = data.get('d', {})
                     asset = account_data.get('a')
                     free = account_data.get('f')
@@ -173,4 +192,13 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
             except asyncio.CancelledError:
                 pass
         logger.info(f"User {user_id} WebSocket listener stopped")
+        # Быстрое восстановление пользовательского соединения
+        try:
+            if not manager.is_shutting_down:
+                # Мягко закрываем (если еще числится), затем переподключаем
+                await manager.disconnect_user(user_id)
+                await asyncio.sleep(1)
+                asyncio.create_task(manager.connect_user_data_stream(user_id))
+        except Exception as e:
+            logger.error(f"[UserWS] Failed to schedule reconnect for user {user_id}: {e}")
 

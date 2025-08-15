@@ -1,0 +1,42 @@
+# Dependencies and environments
+venv/
+.venv/
+env/
+node_modules/
+
+# Python caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+*.so
+
+# VCS
+.git/
+.gitignore
+
+# Editor/OS
+.DS_Store
+*.swp
+*.swo
+
+# Logs and artifacts
+logs/
+*.log
+bot_logs.log
+
+# Tests and tooling caches
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Env files
+.env
+*.env
+
+# Misc
+*.sqlite3
+
+# Keep mexc-sdk-1.0.0 (local package) in context for pip install
+# Do NOT exclude mexc-sdk-1.0.0 or its contents
