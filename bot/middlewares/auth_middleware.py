@@ -8,7 +8,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from aiogram.fsm.context import FSMContext
 from bot.logger import logger
 
-ALLOWED_COMMANDS = ["/set_keys"]
+ALLOWED_COMMANDS = ["/set_keys", "/start", "/help", "/ping"]
 
 
 class AuthMiddleware(BaseMiddleware):
@@ -20,7 +20,12 @@ class AuthMiddleware(BaseMiddleware):
     ) -> Any:
         message: Message = event
         state: FSMContext = data.get("state")
-        current_state = await state.get_state()
+        current_state = None
+        try:
+            if state is not None:
+                current_state = await state.get_state()
+        except Exception:
+            current_state = None
         telegram_id = message.from_user.id
 
         logger.info(f"Received message from {telegram_id}: {message.text}")
