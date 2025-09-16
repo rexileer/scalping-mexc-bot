@@ -27,6 +27,7 @@ from bot.utils.set_commands import set_default_commands
 from bot.utils.log_cleaner import start_log_cleaner
 from bot.utils.websocket_manager import websocket_manager
 from bot.utils.autobuy_restart import restart_autobuy_for_users
+from bot.utils.reconciler import order_status_reconciler_loop
 from django.conf import settings
 
 config_obj = load_config()
@@ -71,6 +72,9 @@ async def main():
         
         # Запускаем мониторинг соединений
         connection_monitor_task = asyncio.create_task(websocket_manager.monitor_connections())
+
+        # Фоновый reconciler статусов ордеров
+        reconciler_task = asyncio.create_task(order_status_reconciler_loop(poll_interval_seconds=60))
         
         # Инициализируем общее WebSocket соединение для мониторинга цен
         # Будем инициализировать его по требованию

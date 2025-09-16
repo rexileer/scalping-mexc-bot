@@ -256,8 +256,18 @@ async def buy_handler(message: Message):
             buy_price=real_price,
             quantity=executed_qty,
             sell_price=sell_price,
-            status="SELL_ORDER_PLACED"
+            status="NEW"
         )
+
+        # 6.1 Уточняем начальный статус через REST сразу после создания SELL
+        try:
+            order_check = trade_client.query_order(symbol, {"orderId": sell_order_id})
+            current_status = order_check.get("status")
+            if current_status and current_status != deal.status:
+                deal.status = current_status
+                await sync_to_async(deal.save)()
+        except Exception as e:
+            logger.warning(f"Не удалось уточнить начальный статус ордера {sell_order_id}: {e}")
 
         # 7. Отправляем ответ
         response_text = (
@@ -436,7 +446,7 @@ async def status_pagination_handler(callback: CallbackQuery):
         # Получаем активные ордера из базы (без обновления статусов)
         active_deals = await sync_to_async(list)(Deal.objects.filter(
             user=user,
-            status__in=["SELL_ORDER_PLACED", "PARTIALLY_FILLED", "NEW"]
+            status__in=["PARTIALLY_FILLED", "NEW"]
         ).order_by("-created_at"))
 
         # Расчет параметров пагинации
@@ -553,14 +563,14 @@ async def show_status_page(message, user_id, page=1, check_status=True):
 
                         # Ищем ордера, которые были NEW в базе, но не найдены в API
                         for deal_id, deal in deals_by_id.items():
-                            if deal.status in ["NEW", "PARTIALLY_FILLED", "SELL_ORDER_PLACED"] and deal_id not in api_order_ids:
+                            if deal.status in ["NEW", "PARTIALLY_FILLED"] and deal_id not in api_order_ids:
                                 # Проверяем статус через API для подтверждения
                                 api_status = await sync_to_async(get_actual_order_status)(
                                     user, deal.symbol, deal.order_id
                                 )
 
                                 # Если ордер не найден или завершен, отмечаем как SKIPPED
-                                if api_status == "ERROR" or api_status not in ["NEW", "PARTIALLY_FILLED", "SELL_ORDER_PLACED"]:
+                                if api_status == "ERROR" or api_status not in ["NEW", "PARTIALLY_FILLED"]:
                                     deal.status = "SKIPPED"
                                     await sync_to_async(deal.save)()
                                     logger.info(f"Ордер {deal_id} помечен как SKIPPED (не найден в API)")
@@ -583,7 +593,7 @@ async def show_status_page(message, user_id, page=1, check_status=True):
                                     await sync_to_async(deal.save)()
 
                                 # Добавляем в список активных, если статус соответствует
-                                if current_status in ["SELL_ORDER_PLACED", "PARTIALLY_FILLED", "NEW"]:
+                                if current_status in ["PARTIALLY_FILLED", "NEW"]:
                                     active_deals.append(deal)
                             else:
                                 # Этот ордер не в нашей базе, возможно это ордер созданный в другом месте
@@ -595,7 +605,7 @@ async def show_status_page(message, user_id, page=1, check_status=True):
                 # После всех проверок через API получаем активные ордера из базы
                 active_deals = await sync_to_async(list)(Deal.objects.filter(
                     user=user,
-                    status__in=["SELL_ORDER_PLACED", "PARTIALLY_FILLED", "NEW"]
+                    status__in=["PARTIALLY_FILLED", "NEW"]
                 ).order_by("-created_at"))
 
             except Exception as e:
@@ -603,13 +613,13 @@ async def show_status_page(message, user_id, page=1, check_status=True):
                 # Продолжаем с данными из базы
                 active_deals = await sync_to_async(list)(Deal.objects.filter(
                     user=user,
-                    status__in=["SELL_ORDER_PLACED", "PARTIALLY_FILLED", "NEW"]
+                    status__in=["PARTIALLY_FILLED", "NEW"]
                 ).order_by("-created_at"))
         else:
             # Если не обновляем статусы, просто получаем активные ордера из базы
             active_deals = await sync_to_async(list)(Deal.objects.filter(
                 user=user,
-                status__in=["SELL_ORDER_PLACED", "PARTIALLY_FILLED", "NEW"]
+                status__in=["PARTIALLY_FILLED", "NEW"]
             ).order_by("-created_at"))
 
         # Расчет параметров пагинации

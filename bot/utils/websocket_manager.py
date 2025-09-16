@@ -24,7 +24,7 @@ from bot.utils.ws.ping import ping_user_loop as _ping_user_loop
 class MexcWebSocketManager:
     """Class to manage WebSocket connections to MEXC exchange."""
 
-    BASE_URL = "ws://wbs-api.mexc.com/ws"
+    BASE_URL = "wss://wbs-api.mexc.com/ws"
     REST_API_URL = "https://api.mexc.com"
 
     def __init__(self):
@@ -693,12 +693,21 @@ class MexcWebSocketManager:
                         await asyncio.sleep(60)
                         market_failure_count = 0
 
-                # Проверяем пользовательские соединения (менее агрессивно)
+                # Проверяем пользовательские соединения (активность и возраст)
                 for user_id in list(self.user_connections.keys()):
                     connection_data = self.user_connections[user_id]
                     created_at = connection_data.get('created_at', 0)
+                    last_message_at = connection_data.get('last_message_at', 0)
 
-                    # Проверяем только очень старые соединения (2 часа)
+                    # Быстрый reconnect, если нет сообщений дольше 120 сек
+                    if last_message_at and (current_time - last_message_at) > 120:
+                        logger.info(f"User {user_id} WS inactive for {(current_time - last_message_at):.0f}s, reconnecting...")
+                        await self.disconnect_user(user_id)
+                        await asyncio.sleep(1)
+                        await self.connect_user_data_stream(user_id)
+                        continue
+
+                    # Дополнительная страховка по очень старым соединениям (2 часа)
                     if current_time - created_at > 7200:  # 2 hours
                         logger.info(f"Connection for user {user_id} is very stale, reconnecting...")
                         await self.disconnect_user(user_id)

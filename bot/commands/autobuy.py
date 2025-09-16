@@ -74,7 +74,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
             # Восстанавливаем активные ордера из БД
             deals_qs = Deal.objects.filter(
                 user=user,
-                status__in=["SELL_ORDER_PLACED", "NEW", "PARTIALLY_FILLED"],
+                status__in=["NEW", "PARTIALLY_FILLED"],
                 is_autobuy=True
             ).order_by("-created_at")
 
@@ -480,9 +480,20 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
                 buy_price=real_price,
                 quantity=executed_qty,
                 sell_price=sell_price,
-                status="SELL_ORDER_PLACED",
+                status="NEW",
                 is_autobuy=True
             )
+
+            # Уточняем статус сразу после создания SELL через REST
+            try:
+                order_check = trade_client.query_order(symbol, {"orderId": sell_order_id})
+                current_status = order_check.get("status")
+                if current_status and current_status != "NEW":
+                    deal_obj = await sync_to_async(Deal.objects.get)(order_id=sell_order_id)
+                    deal_obj.status = current_status
+                    await sync_to_async(deal_obj.save)()
+            except Exception as e:
+                logger.warning(f"[Autobuy] Не удалось уточнить начальный статус ордера {sell_order_id}: {e}")
 
             # Добавляем ордер в список активных
             order_info = {

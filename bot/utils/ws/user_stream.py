@@ -104,7 +104,7 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                     )
 
                     try:
-                        await update_order_status(order_id, symbol, status)
+                        await update_order_status(order_id, symbol, status, user_id)
                     except Exception as e:
                         logger.error(f"Ошибка обновления статуса ордера: {e}")
 
@@ -146,7 +146,7 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                         f"Обновление ордера {order_id} для пользователя {user_id}: {symbol} - {status} (код: {status_code})"
                     )
                     try:
-                        await update_order_status(order_id, symbol, status)
+                        await update_order_status(order_id, symbol, status, user_id)
                     except Exception as e:
                         logger.error(f"Ошибка обновления статуса ордера: {e}")
 

@@ -49,13 +49,19 @@ async def handle_order_update(user_id: int, data: Dict[str, Any]):
         logger.exception(f"Error handling order update for user {user_id}: {e}")
 
 
-async def update_order_status(order_id: str, symbol: str, status: str):
-    """Update order status in the database and notify user if needed."""
+async def update_order_status(order_id: str, symbol: str, status: str, user_id: Optional[int] = None):
+    """Update order status in the database and notify user if needed.
+
+    If user_id is provided, the deal will be resolved within that user's scope.
+    """
     try:
         @sync_to_async
         def get_and_update_deal():
             try:
-                deal = Deal.objects.get(order_id=order_id)
+                if user_id is not None:
+                    deal = Deal.objects.get(order_id=order_id, user__telegram_id=user_id)
+                else:
+                    deal = Deal.objects.get(order_id=order_id)
                 old_status = deal.status
                 # Обновляем только если статус изменился
                 if old_status != status:
@@ -65,17 +71,18 @@ async def update_order_status(order_id: str, symbol: str, status: str):
                     return deal, old_status != status, deal.user.telegram_id
                 return deal, False, deal.user.telegram_id
             except Deal.DoesNotExist:
-                logger.warning(f"Deal with order_id {order_id} not found")
+                logger.warning(f"Deal with order_id {order_id} not found (user={user_id})")
                 return None, False, None
             except Exception as e:
                 logger.error(f"Error updating deal: {e}")
                 return None, False, None
 
-        deal, status_changed, user_id = await get_and_update_deal()
+        deal, status_changed, deal_user_id = await get_and_update_deal()
+        effective_user_id = user_id or deal_user_id
 
         # Если сделка найдена, передаем информацию в автобай (независимо от смены статуса)
-        if deal and user_id:
-            await handle_autobuy_order_update(order_id, symbol, status, user_id)
+        if deal and effective_user_id:
+            await handle_autobuy_order_update(order_id, symbol, status, effective_user_id)
 
         # Если статус изменился и сделка найдена, отправляем уведомление
         if status_changed and deal:
