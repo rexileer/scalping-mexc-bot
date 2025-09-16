@@ -10,6 +10,8 @@ from django.db.utils import OperationalError
 from bot.constants import DEFAULT_PAYMENT_MESSAGE, PAIR
 from aiogram.types import FSInputFile
 
+ALLOWED_COMMANDS = {"/start", "/help", "/ping", "/set_keys"}
+
 
 class AccessMiddleware(BaseMiddleware):
     async def __call__(
@@ -23,6 +25,10 @@ class AccessMiddleware(BaseMiddleware):
             message = event
 
             telegram_user = message.from_user
+
+            # Пропускаем базовые команды без проверки подписки
+            if message.text and any(message.text.startswith(cmd) for cmd in ALLOWED_COMMANDS):
+                return await handler(event, data)
 
             try:
                 # Добавление юзера, если нет (по telegram_id; pair задаем через defaults)
@@ -51,6 +57,7 @@ class AccessMiddleware(BaseMiddleware):
             # Нет подписки — выводим сообщение
             if not subscription:
                 # Пробуем получить кастомное сообщение из базы
+                custom_message = None
                 try:
                     custom_message = await BotMessageForSubscription.objects.afirst()
                     text_to_send = custom_message.text if custom_message else DEFAULT_PAYMENT_MESSAGE
@@ -60,7 +67,7 @@ class AccessMiddleware(BaseMiddleware):
                 except Exception as e:
                     logger.error(f"Error while fetching subscription message: {e}")
                     text_to_send = DEFAULT_PAYMENT_MESSAGE
-                if custom_message and custom_message.image:
+                if custom_message and getattr(custom_message, "image", None):
                     file = FSInputFile(custom_message.image.path)
                     await message.answer_photo(file, text_to_send, parse_mode="HTML")
                     return
