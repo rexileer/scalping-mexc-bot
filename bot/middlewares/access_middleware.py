@@ -25,11 +25,13 @@ class AccessMiddleware(BaseMiddleware):
             telegram_user = message.from_user
 
             try:
-                # Добавление юзера, если нет
+                # Добавление юзера, если нет (по telegram_id; pair задаем через defaults)
                 user, _ = await User.objects.aget_or_create(
                     telegram_id=telegram_user.id,
-                    defaults={"name": telegram_user.username or ""},
-                    pair=PAIR,
+                    defaults={
+                        "name": telegram_user.username or "",
+                        "pair": PAIR,
+                    },
                 )
             except Exception as e:
                 logger.error(f"DB error while checking/creating user: {e}")
