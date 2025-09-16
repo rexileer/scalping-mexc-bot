@@ -699,8 +699,8 @@ class MexcWebSocketManager:
                     created_at = connection_data.get('created_at', 0)
                     last_message_at = connection_data.get('last_message_at', 0)
 
-                    # Быстрый reconnect, если нет сообщений дольше 120 сек
-                    if last_message_at and (current_time - last_message_at) > 120:
+                    # Быстрый reconnect, если нет сообщений дольше 180 сек (с запасом)
+                    if last_message_at and (current_time - last_message_at) > 180:
                         logger.info(f"User {user_id} WS inactive for {(current_time - last_message_at):.0f}s, reconnecting...")
                         await self.disconnect_user(user_id)
                         await asyncio.sleep(1)
@@ -762,7 +762,7 @@ class MexcWebSocketManager:
 
     async def force_cleanup_sessions(self):
         """Force cleanup all sessions to prevent resource leaks."""
-        logger.info("Starting force cleanup of all sessions")
+        # logger.info("Starting force cleanup of all sessions")
         cleanup_count = 0
 
         # Cleanup user sessions - более агрессивно

@@ -849,7 +849,8 @@ async def periodic_resource_check(telegram_id: int):
                 if 'ClientSession' in str(type(obj)):
                     client_session_count += 1
 
-            if client_session_count > 5:  # Порог для журналирования
+            # Учитываем только открытые сессии; повышаем порог для предупреждения
+            if client_session_count > 20:
                 logger.warning(f"Обнаружено {client_session_count} клиентских сессий. Рекомендуется проверить утечку ресурсов.")
 
             # Проверяем состояние ожидания и обновляем его при необходимости

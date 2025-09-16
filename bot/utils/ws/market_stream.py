@@ -131,8 +131,16 @@ async def listen_market_messages_impl(manager: Any):
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
+                    # Handle control messages first to avoid noisy logging
+                    if data.get("msg") == "PONG":
+                        # logger.debug(f"[MarketWS] PONG: {data}")
+                        continue
+                    if 'pong' in data:
+                        # logger.debug(f"[MarketWS] PONG: {data}")
+                        continue
+
                     if not ('s' in data and 'c' in data):
-                        logger.info(f"[MarketWS] 📨 Received message: {data}")
+                        logger.debug(f"[MarketWS] 📨 Received control/non-symbol message: {data}")
 
                     if 'pong' in data:
                         # logger.warning(f"[MarketWS] 🏓 Received PONG from server: {data}")
@@ -147,9 +155,7 @@ async def listen_market_messages_impl(manager: Any):
                             break
                         continue
 
-                    if data.get("msg") == "PONG":
-                        # logger.warning(f"[MarketWS] 🏓 Received PONG response: {data}")
-                        continue
+                    # handled above
 
                     if data.get("method") == "SUBSCRIPTION":
                         if data.get("code") == 0:

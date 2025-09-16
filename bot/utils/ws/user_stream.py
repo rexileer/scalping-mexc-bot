@@ -39,6 +39,11 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
             if msg.type == aiohttp.WSMsgType.TEXT:
                 try:
                     data = json.loads(msg.data)
+                    # any user WS text message resets inactivity timer
+                    try:
+                        manager.user_connections[user_id]['last_message_at'] = time.time()
+                    except Exception:
+                        pass
                 except json.JSONDecodeError as e:
                     logger.error(f"JSON decode error for user {user_id}: {e}, data: {msg.data[:200]}")
                     continue
@@ -71,7 +76,7 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                     continue
 
                 if 'pong' in data:
-                    logger.warning(f"[UserWS] 🏓 Received PONG from server for user {user_id}")
+                    # logger.debug(f"[UserWS] 🏓 PONG for user {user_id}")
                     continue
 
                 if 'ping' in data:
@@ -119,7 +124,7 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                         f"Обновление баланса для {user_id}: {asset} - свободно: {free}, заблокировано: {locked}"
                     )
                 else:
-                    logger.debug(f"Неизвестный канал для {user_id}: {channel}, данные: {json.dumps(data)}")
+                    logger.debug(f"Неизвестный канал для {user_id}: {channel}")
 
             elif msg.type == aiohttp.WSMsgType.BINARY:
                 try:
@@ -160,7 +165,7 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                         f"Обновление баланса для {user_id}: {asset} - свободно: {free}, заблокировано: {locked}"
                     )
                 else:
-                    logger.debug(f"Неизвестный канал для {user_id}: {channel}, данные: {json.dumps(data)}")
+                    logger.debug(f"Неизвестный канал для {user_id}: {channel}")
 
             elif msg.type == aiohttp.WSMsgType.CLOSED:
                 connection_age = time.time() - manager.user_connections[user_id].get('created_at', time.time())
@@ -192,13 +197,5 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
             except asyncio.CancelledError:
                 pass
         logger.info(f"User {user_id} WebSocket listener stopped")
-        # Быстрое восстановление пользовательского соединения
-        try:
-            if not manager.is_shutting_down:
-                # Мягко закрываем (если еще числится), затем переподключаем
-                await manager.disconnect_user(user_id)
-                await asyncio.sleep(1)
-                asyncio.create_task(manager.connect_user_data_stream(user_id))
-        except Exception as e:
-            logger.error(f"[UserWS] Failed to schedule reconnect for user {user_id}: {e}")
+        # Не инициируем реконнект тут, чтобы избежать дублей. Монитор сам восстановит соединение при необходимости.
 
