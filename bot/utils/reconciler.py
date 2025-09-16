@@ -30,7 +30,8 @@ async def _reconcile_user_orders(user: User) -> None:
             return
 
         try:
-            open_orders = client.open_orders(symbol=symbol)
+            # Offload blocking SDK call to thread to avoid event loop starvation
+            open_orders = await asyncio.to_thread(client.open_orders, symbol=symbol)
         except Exception as e:
             logger.warning(f"[Reconciler] open_orders failed for user {user.telegram_id}: {e}")
             open_orders = []
