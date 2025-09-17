@@ -6,22 +6,25 @@ import aiohttp
 from mexc_sdk import Spot
 from users.models import User
 from logger import logger
-from mexc_sdk import Trade
 from utils.api_errors import parse_mexc_error
+from bot.utils.mexc_rest import MexcRestClient
 
 def get_actual_order_status(user: User, symbol: str, order_id: str) -> str:
-    trade_client = Trade(user.api_key, user.api_secret)
+    """Synchronous wrapper used via sync_to_async in async contexts."""
+    client = MexcRestClient(user.api_key, user.api_secret)
+    import asyncio as _asyncio
     try:
-        response = trade_client.query_order(
-            symbol=symbol,
-            options={"orderId": order_id}
-        )
+        loop = _asyncio.new_event_loop()
+        _asyncio.set_event_loop(loop)
+        try:
+            response = loop.run_until_complete(client.query_order(symbol, {"orderId": order_id}))
+        finally:
+            loop.run_until_complete(_asyncio.sleep(0))
+            loop.close()
         if not isinstance(response, dict):
             logger.error(f"⚠️ Ответ не является dict: {type(response)} — {response}")
             return "ERROR"
-
         return response.get("status", "UNKNOWN")
-
     except Exception as e:
         logger.exception(f"Ошибка при получении статуса ордера {order_id}: {e}")
         return "ERROR"

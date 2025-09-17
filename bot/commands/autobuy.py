@@ -7,7 +7,7 @@ from subscriptions.models import Subscription
 from bot.utils.user_autobuy_tasks import user_autobuy_tasks
 from bot.utils.mexc import handle_mexc_response
 from bot.utils.api_errors import parse_mexc_error
-from mexc_sdk import Trade
+from bot.utils.mexc_rest import MexcRestClient
 from logger import logger
 from decimal import Decimal
 from bot.constants import MAX_FAILS
@@ -37,7 +37,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
             from bot.utils.websocket_manager import websocket_manager
 
             user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
-            trade_client = Trade(api_key=user.api_key, api_secret=user.api_secret)
+            rest = MexcRestClient(api_key=user.api_key, api_secret=user.api_secret)
             symbol = user.pair.replace("/", "")
 
             # Инициализируем состояние для пользователя, если его еще нет
@@ -177,10 +177,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
             logger.info(f"Registered bookTicker callback for {telegram_id} on {symbol}")
 
             # Получаем текущую цену через REST API для начала
-            ticker_data = await asyncio.wait_for(
-                asyncio.to_thread(trade_client.ticker_price, symbol),
-                timeout=15,
-            )
+            ticker_data = await rest.ticker_price(symbol)
             handle_mexc_response(ticker_data, "Получение цены")
             current_price = float(ticker_data["price"])
             autobuy_states[telegram_id]['current_price'] = current_price
@@ -407,7 +404,7 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
                 current_price = autobuy_states[telegram_id].get('current_price', 0)
                 # await message.answer(f"🔄 Возобновляем автобай для {symbol} после паузы. Текущая цена: {current_price:.6f} {symbol[3:]}")
 
-            trade_client = Trade(api_key=user.api_key, api_secret=user.api_secret)
+            rest = MexcRestClient(api_key=user.api_key, api_secret=user.api_secret)
             symbol = user.pair.replace("/", "")
             buy_amount = float(user.buy_amount)
             profit_percent = float(user.profit)
@@ -417,24 +414,12 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
             logger.info(f"Начинаем покупку для {telegram_id}, причина: {reason}")
 
             # Выполняем покупку
-            buy_order = await asyncio.wait_for(
-                asyncio.to_thread(
-                    trade_client.new_order,
-                    symbol,
-                    "BUY",
-                    "MARKET",
-                    {"quoteOrderQty": buy_amount},
-                ),
-                timeout=20,
-            )
+            buy_order = await rest.new_order(symbol, "BUY", "MARKET", {"quoteOrderQty": buy_amount})
             handle_mexc_response(buy_order, "Покупка")
             order_id = buy_order["orderId"]
 
             # Подтягиваем детали ордера
-            order_info = await asyncio.wait_for(
-                asyncio.to_thread(trade_client.query_order, symbol, {"orderId": order_id}),
-                timeout=20,
-            )
+            order_info = await rest.query_order(symbol, {"orderId": order_id})
             logger.info(f"Детали ордера {order_id}: {order_info}")
 
             executed_qty = float(order_info.get("executedQty", 0))
@@ -474,19 +459,15 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
             sell_price = round(real_price * (1 + profit_percent / 100), 6)
 
             # Создание лимитного ордера на продажу
-            sell_order = await asyncio.wait_for(
-                asyncio.to_thread(
-                    trade_client.new_order,
-                    symbol,
-                    "SELL",
-                    "LIMIT",
-                    {
-                        "quantity": executed_qty,
-                        "price": f"{sell_price:.6f}",
-                        "timeInForce": "GTC",
-                    },
-                ),
-                timeout=20,
+            sell_order = await rest.new_order(
+                symbol,
+                "SELL",
+                "LIMIT",
+                {
+                    "quantity": executed_qty,
+                    "price": f"{sell_price:.6f}",
+                    "timeInForce": "GTC",
+                },
             )
             handle_mexc_response(sell_order, "Продажа")
             sell_order_id = sell_order["orderId"]
@@ -510,7 +491,7 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
 
             # Уточняем статус сразу после создания SELL через REST
             try:
-                order_check = trade_client.query_order(symbol, {"orderId": sell_order_id})
+                order_check = await rest.query_order(symbol, {"orderId": sell_order_id})
                 current_status = order_check.get("status")
                 if current_status and current_status != "NEW":
                     deal_obj = await sync_to_async(Deal.objects.get)(order_id=sell_order_id)
