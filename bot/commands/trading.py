@@ -106,7 +106,7 @@ async def balance_handler(message: Message):
         client, pair = get_user_client(message.from_user.id)
         extra_data["pair"] = pair
 
-        account_info = client.account_info()
+        account_info = await asyncio.to_thread(client.account_info)
         logger.info(f"Account Info for {message.from_user.id}: {account_info}")
 
         # Определим интересующие нас токены на основе пары
@@ -130,7 +130,7 @@ async def balance_handler(message: Message):
                 f"Заморожено: {format(locked, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
             )
 
-        orders = client.open_orders(symbol=pair)
+        orders = await asyncio.to_thread(client.open_orders, symbol=pair)
         logger.info(f"Open Orders for {message.from_user.id}: {orders}")
         open_orders_count = len(orders)
         extra_data["open_orders_count"] = open_orders_count
