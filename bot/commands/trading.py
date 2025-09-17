@@ -38,7 +38,7 @@ async def get_user_price(message: Message):
             raise ValueError("Валютная пара не указана.")
 
         # Сначала получаем текущую цену с помощью REST API
-        ticker = await asyncio.to_thread(client.ticker_price, pair)
+        ticker = await asyncio.wait_for(asyncio.to_thread(client.ticker_price, pair), timeout=15)
         current_price = ticker['price']
 
         # Формируем начальный ответ
@@ -106,7 +106,7 @@ async def balance_handler(message: Message):
         client, pair = get_user_client(message.from_user.id)
         extra_data["pair"] = pair
 
-        account_info = await asyncio.to_thread(client.account_info)
+        account_info = await asyncio.wait_for(asyncio.to_thread(client.account_info), timeout=20)
         logger.info(f"Account Info for {message.from_user.id}: {account_info}")
 
         # Определим интересующие нас токены на основе пары
@@ -130,7 +130,7 @@ async def balance_handler(message: Message):
                 f"Заморожено: {format(locked, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
             )
 
-        orders = await asyncio.to_thread(client.open_orders, symbol=pair)
+        orders = await asyncio.wait_for(asyncio.to_thread(client.open_orders, symbol=pair), timeout=20)
         logger.info(f"Open Orders for {message.from_user.id}: {orders}")
         open_orders_count = len(orders)
         extra_data["open_orders_count"] = open_orders_count
@@ -192,20 +192,20 @@ async def buy_handler(message: Message):
         extra_data["buy_amount"] = buy_amount
 
         # 1. Создаём ордер
-        buy_order = await asyncio.to_thread(
+        buy_order = await asyncio.wait_for(asyncio.to_thread(
             trade_client.new_order,
             symbol,
             "BUY",
             "MARKET",
             {"quoteOrderQty": buy_amount},
-        )
+        ), timeout=20)
         handle_mexc_response(buy_order, "Покупка через /buy")
 
         order_id = buy_order["orderId"]
         extra_data["buy_order_id"] = order_id
 
         # 2. Подтягиваем детали через query_order
-        order_info = await asyncio.to_thread(trade_client.query_order, symbol, {"orderId": order_id})
+        order_info = await asyncio.wait_for(asyncio.to_thread(trade_client.query_order, symbol, {"orderId": order_id}), timeout=20)
         logger.info(f"Детали ордера {order_id}: {order_info}")
 
         # 3. Получаем количество и среднюю цену
@@ -235,7 +235,7 @@ async def buy_handler(message: Message):
         extra_data["profit_percent"] = profit_percent
 
         # 5. Выставляем лимитный SELL ордер
-        sell_order = await asyncio.to_thread(
+        sell_order = await asyncio.wait_for(asyncio.to_thread(
             trade_client.new_order,
             symbol,
             "SELL",
@@ -245,7 +245,7 @@ async def buy_handler(message: Message):
                 "price": f"{sell_price:.6f}",
                 "timeInForce": "GTC",
             },
-        )
+        ), timeout=20)
         handle_mexc_response(sell_order, "Продажа")
         sell_order_id = sell_order["orderId"]
         extra_data["sell_order_id"] = sell_order_id
@@ -271,7 +271,7 @@ async def buy_handler(message: Message):
 
         # 6.1 Уточняем начальный статус через REST сразу после создания SELL
         try:
-            order_check = await asyncio.to_thread(trade_client.query_order, symbol, {"orderId": sell_order_id})
+            order_check = await asyncio.wait_for(asyncio.to_thread(trade_client.query_order, symbol, {"orderId": sell_order_id}), timeout=20)
             current_status = order_check.get("status")
             if current_status and current_status != deal.status:
                 deal.status = current_status
