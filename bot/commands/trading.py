@@ -31,7 +31,7 @@ async def get_user_price(message: Message):
 
     try:
         # Получаем клиента и пару для пользователя
-        client, pair = get_user_client(message.from_user.id)
+        client, pair = await sync_to_async(get_user_client)(message.from_user.id)
 
         # Проверяем, что валидная пара получена
         if not pair:
@@ -102,8 +102,8 @@ async def balance_handler(message: Message):
     extra_data = {"username": username, "chat_id": message.chat.id}
 
     try:
-        user = User.objects.get(telegram_id=message.from_user.id)
-        client, pair = get_user_client(message.from_user.id)
+        user = await sync_to_async(User.objects.get)(telegram_id=message.from_user.id)
+        client, pair = await sync_to_async(get_user_client)(message.from_user.id)
         extra_data["pair"] = pair
 
         account_info = await asyncio.wait_for(asyncio.to_thread(client.account_info), timeout=20)
@@ -177,7 +177,7 @@ async def buy_handler(message: Message):
     extra_data = {"username": username, "chat_id": message.chat.id}
 
     try:
-        user = User.objects.get(telegram_id=message.from_user.id)
+        user = await sync_to_async(User.objects.get)(telegram_id=message.from_user.id)
 
         if not user.pair:
             response_text = "❗ Вы не выбрали торговую пару. Введите /pair для выбора."
@@ -550,7 +550,7 @@ async def show_status_page(message, user_id, page=1, check_status=True):
                 client = None
                 symbol = None
                 try:
-                    client, pair = get_user_client(user_id)
+                    client, pair = await sync_to_async(get_user_client)(user_id)
                     symbol = pair  # Используем пару из настроек пользователя
                 except Exception as e:
                     logger.error(f"Ошибка при получении клиента: {e}")
