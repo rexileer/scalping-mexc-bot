@@ -177,7 +177,7 @@ async def autobuy_loop(message: Message, telegram_id: int):
             logger.info(f"Registered bookTicker callback for {telegram_id} on {symbol}")
 
             # Получаем текущую цену через REST API для начала
-            ticker_data = trade_client.ticker_price(symbol)
+            ticker_data = await asyncio.to_thread(trade_client.ticker_price, symbol)
             handle_mexc_response(ticker_data, "Получение цены")
             current_price = float(ticker_data["price"])
             autobuy_states[telegram_id]['current_price'] = current_price
@@ -414,12 +414,18 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
             logger.info(f"Начинаем покупку для {telegram_id}, причина: {reason}")
 
             # Выполняем покупку
-            buy_order = trade_client.new_order(symbol, "BUY", "MARKET", {"quoteOrderQty": buy_amount})
+            buy_order = await asyncio.to_thread(
+                trade_client.new_order,
+                symbol,
+                "BUY",
+                "MARKET",
+                {"quoteOrderQty": buy_amount},
+            )
             handle_mexc_response(buy_order, "Покупка")
             order_id = buy_order["orderId"]
 
             # Подтягиваем детали ордера
-            order_info = trade_client.query_order(symbol, {"orderId": order_id})
+            order_info = await asyncio.to_thread(trade_client.query_order, symbol, {"orderId": order_id})
             logger.info(f"Детали ордера {order_id}: {order_info}")
 
             executed_qty = float(order_info.get("executedQty", 0))
@@ -459,11 +465,17 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
             sell_price = round(real_price * (1 + profit_percent / 100), 6)
 
             # Создание лимитного ордера на продажу
-            sell_order = trade_client.new_order(symbol, "SELL", "LIMIT", {
-                "quantity": executed_qty,
-                "price": f"{sell_price:.6f}",
-                "timeInForce": "GTC"
-            })
+            sell_order = await asyncio.to_thread(
+                trade_client.new_order,
+                symbol,
+                "SELL",
+                "LIMIT",
+                {
+                    "quantity": executed_qty,
+                    "price": f"{sell_price:.6f}",
+                    "timeInForce": "GTC",
+                },
+            )
             handle_mexc_response(sell_order, "Продажа")
             sell_order_id = sell_order["orderId"]
             logger.info(f"SELL ордер {sell_order_id} выставлен на {sell_price:.6f} {symbol[3:]}")
