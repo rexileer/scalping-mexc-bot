@@ -842,7 +842,7 @@ async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
 
 
 async def periodic_resource_check(telegram_id: int):
-    """Периодическая проверка и очистка ресурсов"""
+    """Периодическая проверка и очистка ресурсов + ресинк состояния из БД"""
     while telegram_id in autobuy_states:
         try:
             # Вызываем сборщик мусора
@@ -886,8 +886,48 @@ async def periodic_resource_check(telegram_id: int):
                 if not success:
                     logger.error(f"Не удалось подписаться на {symbol} для {telegram_id}")
 
+            # ===== DB → State ресинк активных ордеров раз в ~60с =====
+            # Пересобираем список активных ордеров из БД и синхронизируем in-memory состояние
+            deals_qs = Deal.objects.filter(
+                user=user,
+                status__in=["NEW", "PARTIALLY_FILLED"],
+                is_autobuy=True
+            ).order_by("-created_at")
+
+            active_deals = await sync_to_async(list)(deals_qs)
+
+            rebuilt_active_orders = []
+            for deal in active_deals:
+                rebuilt_active_orders.append({
+                    "order_id": deal.order_id,
+                    "buy_price": float(deal.buy_price),
+                    "notified": False,
+                    "user_order_number": deal.user_order_number,
+                })
+
+            state = autobuy_states.get(telegram_id, {})
+            current_active_orders = state.get('active_orders', [])
+
+            # Обновляем только если реально поменялось
+            if rebuilt_active_orders != current_active_orders:
+                autobuy_states[telegram_id]['active_orders'] = rebuilt_active_orders
+                logger.info(f"[Resync] Пересобраны active_orders для {telegram_id}: {rebuilt_active_orders}")
+
+                # Если активных ордеров больше нет — переводим в режим ожидания новой возможности
+                if not rebuilt_active_orders:
+                    try:
+                        pause_seconds = user.pause
+                    except Exception:
+                        pause_seconds = 0
+
+                    autobuy_states[telegram_id]['last_buy_price'] = None
+                    autobuy_states[telegram_id]['waiting_for_opportunity'] = True
+                    autobuy_states[telegram_id]['restart_after'] = time.time() + pause_seconds if pause_seconds > 0 else 0
+                    autobuy_states[telegram_id]['waiting_reported'] = False
+                    logger.info(f"[Resync] Установлен режим ожидания для {telegram_id}. Пауза: {pause_seconds}s")
+
         except Exception as e:
             logger.error(f"Ошибка в periodic_resource_check для {telegram_id}: {e}")
 
-        # Проверка каждые 30 секунд
-        await asyncio.sleep(30)
+        # Проверка каждые 60 секунд (ресинк и здоровье)
+        await asyncio.sleep(60)
