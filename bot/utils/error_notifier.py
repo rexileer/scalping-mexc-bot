@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import re
-from typing import Optional
+from typing import Optional, List, Union
 
 import os
 from django.conf import settings
@@ -10,14 +10,41 @@ from aiogram import Bot
 from bot.utils.api_errors import parse_mexc_error, ERROR_MESSAGES
 
 
-def _get_notification_chat_id() -> Optional[int | str]:
-    chat_id = getattr(settings, 'NOTIFICATION_CHAT_ID', None) or os.getenv('NOTIFICATION_CHAT_ID')
-    if not chat_id:
-        return None
+def _parse_chat_id(raw: str) -> Union[int, str]:
+    raw = (raw or '').strip()
+    if not raw:
+        return ''
     try:
-        return int(chat_id)
+        return int(raw)
     except (TypeError, ValueError):
-        return str(chat_id)
+        return raw
+
+
+def _get_notification_chat_ids() -> List[Union[int, str]]:
+    # Preferred plural env/setting
+    candidates = (
+        getattr(settings, 'NOTIFICATION_CHAT_IDS', None)
+        or os.getenv('NOTIFICATION_CHAT_IDS')
+    )
+
+    # Fallbacks: single chat and channel ids
+    if not candidates:
+        single = getattr(settings, 'NOTIFICATION_CHAT_ID', None) or os.getenv('NOTIFICATION_CHAT_ID')
+        channel = getattr(settings, 'NOTIFICATION_CHANNEL_ID', None) or os.getenv('NOTIFICATION_CHANNEL_ID')
+        parts = [p for p in [single, channel] if p]
+        candidates = ','.join(parts)
+
+    if not candidates:
+        return []
+
+    # Support comma/semicolon separated list
+    raw_parts = [p for chunk in str(candidates).split(';') for p in chunk.split(',')]
+    ids: List[Union[int, str]] = []
+    for token in raw_parts:
+        parsed = _parse_chat_id(token)
+        if parsed != '':
+            ids.append(parsed)
+    return ids
 
 
 async def _send_direct_message(chat_id: int | str, text: str, parse_mode: str = "HTML") -> None:
@@ -54,10 +81,11 @@ async def _send_direct_message(chat_id: int | str, text: str, parse_mode: str = 
 
 
 async def notify_error_text(text: str) -> None:
-    chat_id = _get_notification_chat_id()
-    if not chat_id:
+    chat_ids = _get_notification_chat_ids()
+    if not chat_ids:
         return
-    await _send_direct_message(chat_id, text, parse_mode="HTML")
+    for chat_id in chat_ids:
+        await _send_direct_message(chat_id, text, parse_mode="HTML")
 
 
 def _build_message(lines: list[str]) -> str:
@@ -102,16 +130,31 @@ class TelegramErrorHandler(logging.Handler):
     """
 
     def __init__(self) -> None:
-        # Capture WARNING and above to ensure key validation issues surface
-        super().__init__(level=logging.WARNING)
+        # Forward only ERROR and above to reduce noise
+        super().__init__(level=logging.ERROR)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            chat_id = _get_notification_chat_id()
-            if not chat_id:
+            chat_ids = _get_notification_chat_ids()
+            if not chat_ids:
                 return
 
-            # Compose message
+            # Compose message; dedupe & guard conditions
+            # 1) Only forward real exceptions
+            if not record.exc_info:
+                return
+
+            # 2) Ignore technical log entries from bot_logging (command logs)
+            pathname = getattr(record, 'pathname', '') or ''
+            if 'bot_logging.py' in pathname:
+                return
+
+            # 3) Ignore synthetic messages like "Выполнил команду"
+            raw_message = record.getMessage() or ''
+            if 'Выполнил команду' in raw_message:
+                return
+
+            # Continue composing message
             user_id = getattr(record, 'user_id', None)
             component = self._detect_component(record)
             command = self._detect_command(record)
@@ -130,7 +173,7 @@ class TelegramErrorHandler(logging.Handler):
             elif component:
                 lines.append(f"В {component}")
 
-            message_text = record.getMessage()
+            message_text = raw_message
 
             # If exception, enrich message; prefer human-friendly MEXC hint if any
             if record.exc_info and record.exc_info[1]:
@@ -161,7 +204,8 @@ class TelegramErrorHandler(logging.Handler):
             text = _build_message(lines)
 
             async def _send():
-                await _send_direct_message(chat_id, text, parse_mode="HTML")
+                for chat_id in chat_ids:
+                    await _send_direct_message(chat_id, text, parse_mode="HTML")
 
             try:
                 loop = asyncio.get_running_loop()

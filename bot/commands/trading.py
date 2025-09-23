@@ -83,10 +83,6 @@ async def get_user_price(message: Message):
         response_text = "Произошла ошибка при получении цены."
         success = False
         await message.answer(response_text)
-        try:
-            await notify_user_command_error(user_id, command, parse_mexc_error(e))
-        except Exception:
-            pass
 
     # Логируем команду и ответ
     await log_command(
@@ -185,10 +181,6 @@ async def balance_handler(message: Message):
         response_text = "Произошла ошибка при получении баланса."
         success = False
         await message.answer(response_text)
-        try:
-            await notify_user_command_error(user_id, command, parse_mexc_error(e))
-        except Exception:
-            pass
 
     # Логируем команду и ответ
     await log_command(
@@ -326,10 +318,6 @@ async def buy_handler(message: Message):
         response_text = f"❌ {parse_mexc_error(e)}"
         success = False
         await message.answer(response_text)
-        try:
-            await notify_user_command_error(user_id, command, parse_mexc_error(e))
-        except Exception:
-            pass
 
     # Логируем команду и ответ
     await log_command(
