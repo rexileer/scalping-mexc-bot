@@ -59,12 +59,37 @@ ERROR_MESSAGES = {
 
 
 import re
+import ast
 
 def parse_mexc_error(e: Exception) -> str:
+    """
+    Возвращает человекочитаемое сообщение по коду MEXC.
+    Поддерживает строки с одинарными или двойными кавычками и словари.
+    """
     error_text = str(e)
-    match = re.search(r'"code":\s*(\d+)', error_text)
+
+    # 1) Попытка распарсить как словарь
+    try:
+        if error_text.startswith('{') and error_text.endswith('}'):
+            data = ast.literal_eval(error_text)
+            code_val = data.get('code')
+            if isinstance(code_val, int) and code_val in ERROR_MESSAGES:
+                return ERROR_MESSAGES[code_val]
+    except Exception:
+        pass
+
+    # 2) Regex: двойные кавычки
+    match = re.search(r'"code"\s*[:=]\s*(\d+)', error_text)
     if match:
         code = int(match.group(1))
         if code in ERROR_MESSAGES:
             return ERROR_MESSAGES[code]
+
+    # 3) Regex: одинарные кавычки
+    match = re.search(r"'code'\s*[:=]\s*(\d+)", error_text)
+    if match:
+        code = int(match.group(1))
+        if code in ERROR_MESSAGES:
+            return ERROR_MESSAGES[code]
+
     return f"Произошла ошибка:\n<code>{error_text}</code>"
