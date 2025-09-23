@@ -30,20 +30,20 @@ async def get_user_price(message: Message):
     success = True
 
     try:
-        # Получаем клиента и пару для пользователя
-        client, pair = await sync_to_async(get_user_client)(message.from_user.id)
+        # Получаем пользователя и пару (без блокировки thread_sensitive)
+        user = await asyncio.wait_for(asyncio.to_thread(User.objects.get, telegram_id=message.from_user.id), timeout=10)
+        pair = user.pair
 
         # Проверяем, что валидная пара получена
         if not pair:
             raise ValueError("Валютная пара не указана.")
 
         # Сначала получаем текущую цену с помощью REST API
-        # Для /price оставим текущего клиента Spot, но цену возьмем из REST клиента напрямую
-        rest = MexcRestClient(api_key=client.api_key, api_secret=client.api_secret) if hasattr(client, 'api_key') else None
-        if rest:
-            ticker = await rest.ticker_price(pair)
-        else:
-            ticker = await asyncio.wait_for(asyncio.to_thread(client.ticker_price, pair), timeout=15)
+        # Тикер публичный — используем REST напрямую
+        api_key = user.api_key or ""
+        api_secret = user.api_secret or ""
+        rest = MexcRestClient(api_key=api_key, api_secret=api_secret)
+        ticker = await asyncio.wait_for(rest.ticker_price(pair), timeout=10)
         current_price = ticker['price']
 
         # Формируем начальный ответ
@@ -109,21 +109,23 @@ async def balance_handler(message: Message):
     try:
         logger.info("/balance: fetching user from DB...")
         user = await asyncio.wait_for(sync_to_async(User.objects.get)(telegram_id=message.from_user.id), timeout=10)
-        logger.info("/balance: user fetched, getting client/pair...")
-        client, pair = await asyncio.wait_for(sync_to_async(get_user_client)(message.from_user.id), timeout=10)
-        rest = MexcRestClient(api_key=client.api_key, api_secret=client.api_secret) if hasattr(client, 'api_key') else None
+        logger.info("/balance: user fetched, reading pair/keys...")
+        pair = user.pair
         extra_data["pair"] = pair
+        if not user.api_key or not user.api_secret:
+            response_text = "❗ Не настроены API ключи. Укажите их в настройках."
+            success = False
+            await message.answer(response_text)
+            raise ValueError("Missing API keys")
+        rest = MexcRestClient(api_key=user.api_key, api_secret=user.api_secret)
 
         logger.info("/balance: fetching account_info...")
-        if rest:
-            account_info_task = asyncio.create_task(rest.account_info())
-            try:
-                account_info = await asyncio.wait_for(account_info_task, timeout=20)
-            except asyncio.TimeoutError:
-                account_info_task.cancel()
-                raise
-        else:
-            account_info = await asyncio.wait_for(asyncio.to_thread(client.account_info), timeout=20)
+        account_info_task = asyncio.create_task(rest.account_info())
+        try:
+            account_info = await asyncio.wait_for(account_info_task, timeout=20)
+        except asyncio.TimeoutError:
+            account_info_task.cancel()
+            raise
         logger.info(f"Account Info for {message.from_user.id}: {account_info}")
 
         # Определим интересующие нас токены на основе пары
@@ -148,15 +150,12 @@ async def balance_handler(message: Message):
             )
 
         logger.info("/balance: fetching open_orders...")
-        if rest:
-            orders_task = asyncio.create_task(rest.open_orders(symbol=pair))
-            try:
-                orders = await asyncio.wait_for(orders_task, timeout=20)
-            except asyncio.TimeoutError:
-                orders_task.cancel()
-                raise
-        else:
-            orders = await asyncio.wait_for(asyncio.to_thread(client.open_orders, symbol=pair), timeout=20)
+        orders_task = asyncio.create_task(rest.open_orders(symbol=pair))
+        try:
+            orders = await asyncio.wait_for(orders_task, timeout=20)
+        except asyncio.TimeoutError:
+            orders_task.cancel()
+            raise
         logger.info(f"Open Orders for {message.from_user.id}: {orders}")
         open_orders_count = len(orders)
         extra_data["open_orders_count"] = open_orders_count
@@ -177,7 +176,7 @@ async def balance_handler(message: Message):
         logger.info(f"User {user.telegram_id} requested balance and orders.")
 
     except Exception as e:
-        logger.error(f"Ошибка при получении баланса для пользователя {message.from_user.id}: {e}")
+        logger.error(f"Ошибка при получении баланса для пользователя {message.from_user.id}: {e}", exc_info=True)
         response_text = "Произошла ошибка при получении баланса."
         success = False
         await message.answer(response_text)
