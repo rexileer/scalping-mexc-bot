@@ -97,6 +97,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_TOKEN')
 PAIR = os.getenv('PAIR')
+NOTIFICATION_CHAT_ID = os.getenv('NOTIFICATION_CHAT_ID')
 
 # Настройки логирования
 LOGGING = {

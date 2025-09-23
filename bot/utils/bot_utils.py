@@ -1,7 +1,7 @@
 from bot.config import bot_instance
 from aiogram import Bot
 from django.conf import settings
-from logger import logger
+from bot.logger import logger
 
 async def get_bot_instance():
     """

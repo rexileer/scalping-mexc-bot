@@ -18,6 +18,18 @@ logging.basicConfig(
 
 logger = logging.getLogger("TelegramBot")
 
+# Attach Telegram error handler if NOTIFICATION_CHAT_ID is configured
+try:
+    from django.conf import settings
+    from bot.utils.error_notifier import TelegramErrorHandler
+    if getattr(settings, 'NOTIFICATION_CHAT_ID', None):
+        # Avoid duplicate handlers if module reloaded
+        if not any(isinstance(h, TelegramErrorHandler) for h in logger.handlers):
+            logger.addHandler(TelegramErrorHandler())
+except Exception:
+    # Do not fail logging setup
+    pass
+
 # Асинхронное логирование в БД
 async def log_to_db(message, level='INFO', user=None, extra_data=None):
     """

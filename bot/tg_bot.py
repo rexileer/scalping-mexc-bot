@@ -23,6 +23,7 @@ from bot.routers import setup_routers
 from bot.middlewares.access_middleware import AccessMiddleware
 from bot.middlewares.auth_middleware import AuthMiddleware
 from bot.middlewares.logging_middleware import LoggingMiddleware
+from bot.middlewares.error_reporting_middleware import ErrorReportingMiddleware
 from bot.utils.set_commands import set_default_commands
 from bot.utils.log_cleaner import start_log_cleaner
 from bot.utils.websocket_manager import websocket_manager
@@ -55,6 +56,10 @@ async def main():
         # Добавляем middleware для логирования всех сообщений и команд
         dp.message.middleware(LoggingMiddleware())
         dp.callback_query.middleware(LoggingMiddleware())
+
+        # Middleware для уведомления об ошибках
+        dp.message.middleware(ErrorReportingMiddleware())
+        dp.callback_query.middleware(ErrorReportingMiddleware())
         
         # Запускаем планировщик задач
         start_scheduler(bot)
