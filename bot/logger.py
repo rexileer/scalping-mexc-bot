@@ -6,17 +6,17 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
 
-# Настраиваем базовое логирование
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('bot_logs.log', mode='a')  # Запись логов в файл 'bot_logs.log'
-    ]
-)
-
+# Настраиваем базовое логирование (создаём логгер вручную, чтобы контролировать обработчики)
 logger = logging.getLogger("TelegramBot")
+logger.setLevel(logging.INFO)
+
+if not logger.handlers:
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    file_handler = logging.FileHandler('bot_logs.log', mode='a')
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    logger.addHandler(stream_handler)
+    logger.addHandler(file_handler)
 
 # Attach Telegram error handler if NOTIFICATION_CHAT_ID is configured
 try:

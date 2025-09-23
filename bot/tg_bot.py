@@ -49,17 +49,15 @@ async def main():
         # Подключаем все маршрутизаторы
         dp.include_router(setup_routers())
         
-        # Подключаем middleware
+        # Подключаем middleware (ошибки первыми, чтобы перехватывать как можно больше)
+        dp.message.middleware(ErrorReportingMiddleware())
+        dp.callback_query.middleware(ErrorReportingMiddleware())
         dp.message.middleware(AccessMiddleware())
         dp.message.middleware(AuthMiddleware())
         
         # Добавляем middleware для логирования всех сообщений и команд
         dp.message.middleware(LoggingMiddleware())
         dp.callback_query.middleware(LoggingMiddleware())
-
-        # Middleware для уведомления об ошибках
-        dp.message.middleware(ErrorReportingMiddleware())
-        dp.callback_query.middleware(ErrorReportingMiddleware())
         
         # Запускаем планировщик задач
         start_scheduler(bot)

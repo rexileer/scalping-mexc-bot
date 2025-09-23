@@ -3,6 +3,7 @@ import logging
 import re
 from typing import Optional
 
+import os
 from django.conf import settings
 
 from aiogram import Bot
@@ -10,7 +11,7 @@ from bot.utils.api_errors import parse_mexc_error, ERROR_MESSAGES
 
 
 def _get_notification_chat_id() -> Optional[int | str]:
-    chat_id = getattr(settings, 'NOTIFICATION_CHAT_ID', None)
+    chat_id = getattr(settings, 'NOTIFICATION_CHAT_ID', None) or os.getenv('NOTIFICATION_CHAT_ID')
     if not chat_id:
         return None
     try:
