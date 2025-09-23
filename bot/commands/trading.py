@@ -107,13 +107,21 @@ async def balance_handler(message: Message):
     extra_data = {"username": username, "chat_id": message.chat.id}
 
     try:
-        user = await sync_to_async(User.objects.get)(telegram_id=message.from_user.id)
-        client, pair = await sync_to_async(get_user_client)(message.from_user.id)
+        logger.info("/balance: fetching user from DB...")
+        user = await asyncio.wait_for(sync_to_async(User.objects.get)(telegram_id=message.from_user.id), timeout=10)
+        logger.info("/balance: user fetched, getting client/pair...")
+        client, pair = await asyncio.wait_for(sync_to_async(get_user_client)(message.from_user.id), timeout=10)
         rest = MexcRestClient(api_key=client.api_key, api_secret=client.api_secret) if hasattr(client, 'api_key') else None
         extra_data["pair"] = pair
 
+        logger.info("/balance: fetching account_info...")
         if rest:
-            account_info = await rest.account_info()
+            account_info_task = asyncio.create_task(rest.account_info())
+            try:
+                account_info = await asyncio.wait_for(account_info_task, timeout=20)
+            except asyncio.TimeoutError:
+                account_info_task.cancel()
+                raise
         else:
             account_info = await asyncio.wait_for(asyncio.to_thread(client.account_info), timeout=20)
         logger.info(f"Account Info for {message.from_user.id}: {account_info}")
@@ -139,8 +147,14 @@ async def balance_handler(message: Message):
                 f"Заморожено: {format(locked, ',.6f').replace(',', 'X').replace('.', ',').replace('X', '.').replace(' ', ' ')}"
             )
 
+        logger.info("/balance: fetching open_orders...")
         if rest:
-            orders = await rest.open_orders(symbol=pair)
+            orders_task = asyncio.create_task(rest.open_orders(symbol=pair))
+            try:
+                orders = await asyncio.wait_for(orders_task, timeout=20)
+            except asyncio.TimeoutError:
+                orders_task.cancel()
+                raise
         else:
             orders = await asyncio.wait_for(asyncio.to_thread(client.open_orders, symbol=pair), timeout=20)
         logger.info(f"Open Orders for {message.from_user.id}: {orders}")
@@ -570,7 +584,8 @@ async def show_status_page(message, user_id, page=1, check_status=True):
 
                     # Получаем все открытые ордера для пары из API
                     try:
-                        open_orders = client.open_orders(symbol=symbol)
+                        # mexc_sdk call is synchronous; offload to thread and guard with timeout
+                        open_orders = await asyncio.wait_for(asyncio.to_thread(client.open_orders, symbol=symbol), timeout=20)
                         logger.info(f"Получено {len(open_orders)} открытых ордеров для пользователя {user_id}")
 
                         # Создаем множество ID ордеров из API для быстрой проверки
