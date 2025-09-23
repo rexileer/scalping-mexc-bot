@@ -130,7 +130,7 @@ async def listen_market_messages_impl(manager: Any):
                 continue
             except Exception as e:
                 connection_age = time.time() - manager.market_connection.get('created_at', time.time())
-            logger.error(f"[MarketWS] Error receiving message after {connection_age:.1f}s: {e}")
+                logger.error(f"[MarketWS] Error receiving message after {connection_age:.1f}s: {e}")
                 break
 
             if msg.type == aiohttp.WSMsgType.TEXT:
@@ -190,7 +190,7 @@ async def listen_market_messages_impl(manager: Any):
                 try:
                     data = decode_push_message(msg.data)
                     if data is None:
-                            logger.error("[MarketWS] Failed to decode protobuf binary market message")
+                        logger.error("[MarketWS] Failed to decode protobuf binary market message")
                         continue
                     await handle_market_message_impl(manager, data)
                 except Exception as e:
