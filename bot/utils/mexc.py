@@ -5,7 +5,7 @@ import requests
 import aiohttp
 from mexc_sdk import Spot
 from users.models import User
-from logger import logger
+from bot.logger import logger
 from utils.api_errors import parse_mexc_error
 from bot.utils.mexc_rest import MexcRestClient
 

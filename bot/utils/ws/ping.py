@@ -1,6 +1,6 @@
 import asyncio
 import json
-from logger import logger
+from bot.logger import logger
 
 
 async def ping_market_loop(ws):

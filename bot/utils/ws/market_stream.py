@@ -4,7 +4,8 @@ import time
 import aiohttp
 from typing import Any, Dict
 
-from logger import logger
+from bot.logger import logger
+from bot.utils.error_notifier import notify_component_error
 from bot.utils.ws.pb_decoder import decode_push_message
 
 
@@ -88,6 +89,10 @@ async def handle_market_message_impl(manager: Any, message: Dict[str, Any]):
             logger.info(f"[MarketWS] Subscription successful response: {message}")
         elif message.get("code") != 0 and message.get("msg"):
             logger.error(f"[MarketWS] Received error message response from MEXC: {message}")
+            try:
+                await notify_component_error("вебсокетах (рынок)", f"Получено сообщение об ошибке: {message}")
+            except Exception:
+                pass
         elif not symbol:
             logger.debug(f"[MarketWS] Received non-symbol or unrecognized market message: {message}")
 
@@ -125,7 +130,7 @@ async def listen_market_messages_impl(manager: Any):
                 continue
             except Exception as e:
                 connection_age = time.time() - manager.market_connection.get('created_at', time.time())
-                logger.error(f"[MarketWS] Error receiving message after {connection_age:.1f}s: {e}")
+            logger.error(f"[MarketWS] Error receiving message after {connection_age:.1f}s: {e}")
                 break
 
             if msg.type == aiohttp.WSMsgType.TEXT:
@@ -166,6 +171,10 @@ async def listen_market_messages_impl(manager: Any):
 
                     if data.get("code") is not None and data.get("code") != 0:
                         logger.error(f"[MarketWS] Received error from MEXC: {data}")
+                        try:
+                            await notify_component_error("вебсокетах (рынок)", f"Ошибка от MEXC: {data}")
+                        except Exception:
+                            pass
                         continue
 
                     await handle_market_message_impl(manager, data)
@@ -181,7 +190,7 @@ async def listen_market_messages_impl(manager: Any):
                 try:
                     data = decode_push_message(msg.data)
                     if data is None:
-                        logger.error("[MarketWS] Failed to decode protobuf binary market message")
+                            logger.error("[MarketWS] Failed to decode protobuf binary market message")
                         continue
                     await handle_market_message_impl(manager, data)
                 except Exception as e:

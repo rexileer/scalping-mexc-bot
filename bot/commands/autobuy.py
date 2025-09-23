@@ -8,7 +8,8 @@ from bot.utils.user_autobuy_tasks import user_autobuy_tasks
 from bot.utils.mexc import handle_mexc_response
 from bot.utils.api_errors import parse_mexc_error
 from bot.utils.mexc_rest import MexcRestClient
-from logger import logger
+from bot.logger import logger
+from bot.utils.error_notifier import notify_user_autobuy_error
 from decimal import Decimal
 from bot.constants import MAX_FAILS
 import json
@@ -573,6 +574,10 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
             logger.error(f"Ошибка в процессе выполнения покупки для {telegram_id}: {e}")
             error_message = parse_mexc_error(e)
             await message.answer(f"❌ Ошибка при покупке: {error_message}")
+            try:
+                await notify_user_autobuy_error(telegram_id, "при создании ордера", e)
+            except Exception:
+                pass
 
             # Увеличиваем счетчик последовательных ошибок
             autobuy_states[telegram_id]['consecutive_errors'] = consecutive_errors + 1
@@ -595,6 +600,10 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
         logger.error(f"Ошибка при выполнении покупки для {telegram_id}: {e}")
         error_message = parse_mexc_error(e)
         await message.answer(f"❌ Ошибка при покупке: {error_message}")
+        try:
+            await notify_user_autobuy_error(telegram_id, "при выполнении покупки", e)
+        except Exception:
+            pass
     finally:
         # Всегда освобождаем блокировку
         lock.release()

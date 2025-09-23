@@ -8,7 +8,8 @@ from utils.mexc import check_mexc_keys_async
 from editing.models import BotMessagesForKeys
 import asyncio
 from aiogram.types import FSInputFile
-from logger import logger
+from bot.logger import logger
+from bot.utils.error_notifier import notify_user_command_error, notify_component_error
 from bot.utils.bot_logging import log_command
 from aiogram.filters import Command
 
@@ -188,6 +189,11 @@ async def get_api_secret(message: Message, state: FSMContext):
             response_text = f"❌ Ошибка проверки API ключей: {error_message}"
             success = False
             await message.answer(response_text)
+            # Admin notification
+            try:
+                await notify_user_command_error(user_id, "/set_keys", f"Неверные API-ключи: {error_message}")
+            except Exception:
+                pass
             # Удаляем сообщение о проверке
             try:
                 await wait_msg.delete()
@@ -244,6 +250,10 @@ async def get_api_secret(message: Message, state: FSMContext):
                 await message.answer(response_text)
                 extra_data["keys_saved"] = True
                 extra_data["ws_error"] = str(ws_error)
+                try:
+                    await notify_component_error("Вебсокет менеджере", f"Не удалось подключиться после установки ключей у пользователя {user_id}: {ws_error}")
+                except Exception:
+                    pass
                 
         except Exception as e:
             logger.error(f"Ошибка при сохранении ключей: {e}")
@@ -251,6 +261,10 @@ async def get_api_secret(message: Message, state: FSMContext):
             success = False
             await message.answer(response_text)
             extra_data["db_error"] = str(e)
+            try:
+                await notify_user_command_error(user_id, "/set_keys", f"Ошибка сохранения ключей: {str(e)}")
+            except Exception:
+                pass
         finally:
             # Удаляем сообщение о проверке
             try:

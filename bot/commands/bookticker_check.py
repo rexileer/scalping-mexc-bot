@@ -4,7 +4,7 @@ from aiogram.types import Message
 from aiogram.filters import Command
 
 from bot.utils.websocket_manager import websocket_manager
-from logger import logger
+from bot.logger import logger
 
 router = Router()
 

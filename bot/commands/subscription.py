@@ -6,7 +6,7 @@ from editing.models import BotMessageForSubscription
 from django.utils.timezone import now
 from bot.constants import DEFAULT_PAYMENT_MESSAGE
 from aiogram.types import FSInputFile
-from logger import logger
+from bot.logger import logger
 from bot.utils.bot_logging import log_command, log_callback
 
 router = Router()

@@ -8,7 +8,8 @@ from bot.utils.mexc import get_user_client
 from bot.utils.websocket_manager import websocket_manager
 from bot.utils.user_autobuy_tasks import user_autobuy_tasks
 from users.models import User, Deal
-from logger import logger
+from bot.logger import logger
+from bot.utils.error_notifier import notify_user_command_error
 from bot.keyboards.inline import get_period_keyboard, get_pagination_keyboard
 from asgiref.sync import sync_to_async
 from bot.utils.mexc_rest import MexcRestClient
@@ -82,6 +83,10 @@ async def get_user_price(message: Message):
         response_text = "Произошла ошибка при получении цены."
         success = False
         await message.answer(response_text)
+        try:
+            await notify_user_command_error(user_id, command, parse_mexc_error(e))
+        except Exception:
+            pass
 
     # Логируем команду и ответ
     await log_command(
@@ -180,6 +185,10 @@ async def balance_handler(message: Message):
         response_text = "Произошла ошибка при получении баланса."
         success = False
         await message.answer(response_text)
+        try:
+            await notify_user_command_error(user_id, command, parse_mexc_error(e))
+        except Exception:
+            pass
 
     # Логируем команду и ответ
     await log_command(
@@ -317,6 +326,10 @@ async def buy_handler(message: Message):
         response_text = f"❌ {parse_mexc_error(e)}"
         success = False
         await message.answer(response_text)
+        try:
+            await notify_user_command_error(user_id, command, parse_mexc_error(e))
+        except Exception:
+            pass
 
     # Логируем команду и ответ
     await log_command(

@@ -3,7 +3,7 @@ from aiogram.types import Message
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 from users.models import Deal
-from logger import logger
+from bot.logger import logger
 from bot.utils.mexc import handle_mexc_response
 from bot.utils.api_errors import parse_mexc_error
 from mexc_sdk import Trade

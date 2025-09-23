@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from bot.utils.mexc import get_user_client
 from bot.utils.websocket_manager import websocket_manager
 from bot.commands.autobuy import autobuy_states
-from logger import logger
+from bot.logger import logger
 
 router = Router()
 

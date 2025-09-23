@@ -2,7 +2,7 @@ import json
 import time
 from typing import List
 
-from logger import logger
+from bot.logger import logger
 
 
 async def subscribe_market_data(manager, symbols: List[str]) -> bool:

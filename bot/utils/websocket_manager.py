@@ -8,7 +8,8 @@ import hmac
 import hashlib
 
 from users.models import User
-from logger import logger
+from bot.logger import logger
+from bot.utils.error_notifier import notify_component_error
 from bot.utils.ws.pb_decoder import decode_push_message
 from bot.utils.ws.price_direction import PriceDirectionTracker
 from bot.utils.ws.market_stream import handle_market_message_impl
@@ -275,6 +276,10 @@ class MexcWebSocketManager:
             except Exception as e:
                 await session.close()
                 logger.error(f"Error connecting WebSocket for user {user_id}: {e}")
+                try:
+                    await notify_component_error("Вебсокет менеджере", f"Ошибка подключения пользователя {user_id}: {e}")
+                except Exception:
+                    pass
                 return False
 
             # Сохраняем информацию о соединении
@@ -311,6 +316,10 @@ class MexcWebSocketManager:
 
         except Exception as e:
             logger.error(f"Error connecting user {user_id} to WebSocket: {e}")
+            try:
+                await notify_component_error("Вебсокет менеджере", f"Ошибка подключения пользователя {user_id}: {e}")
+            except Exception:
+                pass
             return False
         finally:
             # Всегда убираем из списка переподключающихся
@@ -404,6 +413,10 @@ class MexcWebSocketManager:
 
             except Exception as e:
                 logger.error(f"Error connecting to market data WebSocket: {e}")
+                try:
+                    await notify_component_error("вебсокетах (рынок)", f"Ошибка подключения: {e}")
+                except Exception:
+                    pass
                 # Cleanup on error
                 if 'session' in locals():
                     try:
@@ -725,6 +738,10 @@ class MexcWebSocketManager:
 
             except Exception as e:
                 logger.error(f"Error in connection monitor: {e}")
+                try:
+                    await notify_component_error("Вебсокет менеджере", f"Ошибка мониторинга соединений: {e}")
+                except Exception:
+                    pass
                 await asyncio.sleep(30)
 
     async def get_connection_stats(self):

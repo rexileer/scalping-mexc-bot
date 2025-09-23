@@ -85,7 +85,8 @@ class TelegramErrorHandler(logging.Handler):
     """
 
     def __init__(self) -> None:
-        super().__init__(level=logging.ERROR)
+        # Capture WARNING and above to ensure key validation issues surface
+        super().__init__(level=logging.WARNING)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:

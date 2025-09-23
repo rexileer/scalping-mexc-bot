@@ -4,7 +4,8 @@ import time
 import aiohttp
 from typing import Any, Dict
 
-from logger import logger
+from bot.logger import logger
+from bot.utils.error_notifier import notify_component_error
 from bot.utils.ws.pb_decoder import decode_push_message
 
 
@@ -72,7 +73,11 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                             from bot.utils.ws.subscriptions import subscribe_user_orders
                             await subscribe_user_orders(manager, user_id)
                         except Exception as e:
-                            logger.error(f"[UserWS] Resubscribe failed for user {user_id}: {e}")
+                    logger.error(f"[UserWS] Resubscribe failed for user {user_id}: {e}")
+                    try:
+                        await notify_component_error("вебсокетах (пользователь)", f"Ошибка переподписки пользователя {user_id}: {e}")
+                    except Exception:
+                        pass
                     continue
 
                 if 'pong' in data:
@@ -187,8 +192,16 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
         logger.info(f"WebSocket listener task cancelled for user {user_id}")
     except json.JSONDecodeError as e:
         logger.error(f"JSON decode error in WebSocket for user {user_id}: {e}")
+        try:
+            await notify_component_error("вебсокетах (пользователь)", f"JSON ошибка у пользователя {user_id}: {e}")
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"Error in user WebSocket for {user_id}: {e}")
+        try:
+            await notify_component_error("вебсокетах (пользователь)", f"Ошибка в WebSocket у пользователя {user_id}: {e}")
+        except Exception:
+            pass
     finally:
         if 'ping_task' in locals():
             ping_task.cancel()

@@ -3,7 +3,7 @@ import time
 from typing import Dict, List
 
 from asgiref.sync import sync_to_async
-from logger import logger
+from bot.logger import logger
 from users.models import User, Deal
 from bot.utils.mexc import get_user_client, get_actual_order_status
 

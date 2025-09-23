@@ -4,7 +4,7 @@ from aiogram.filters import Command
 from faq.models import FAQ
 from aiogram.types import FSInputFile
 from bot.keyboards.inline import get_faq_keyboard
-from logger import logger
+from bot.logger import logger
 from bot.utils.bot_logging import log_command, log_callback
 
 router = Router()
