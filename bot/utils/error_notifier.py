@@ -21,20 +21,36 @@ def _get_notification_chat_id() -> Optional[int | str]:
 
 
 async def _send_direct_message(chat_id: int | str, text: str, parse_mode: str = "HTML") -> None:
-    """Send message using a temporary Bot instance without logging on failure."""
-    temp_bot: Bot | None = None
+    """Send message via main bot instance if available; fallback to a temporary Bot."""
     try:
-        temp_bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
-        await temp_bot.send_message(chat_id, text, parse_mode=parse_mode)
+        # Try global bot instance first (more reliable within running loop)
+        try:
+            from bot import config as _config
+            bot = getattr(_config, 'bot_instance', None)
+        except Exception:
+            bot = None
+
+        if bot is not None:
+            try:
+                await bot.send_message(chat_id, text, parse_mode=parse_mode)
+                return
+            except Exception:
+                # Fallback to temp bot
+                pass
+
+        temp_bot: Bot | None = None
+        try:
+            temp_bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+            await temp_bot.send_message(chat_id, text, parse_mode=parse_mode)
+        finally:
+            if temp_bot is not None:
+                try:
+                    await temp_bot.session.close()
+                except Exception:
+                    pass
     except Exception:
         # Swallow errors to avoid recursive logging
         pass
-    finally:
-        if temp_bot is not None:
-            try:
-                await temp_bot.session.close()
-            except Exception:
-                pass
 
 
 async def notify_error_text(text: str) -> None:

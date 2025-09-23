@@ -68,6 +68,13 @@ async def main():
         
         # Устанавливаем команды бота
         await set_default_commands(bot)
+
+        # Тест нотификатора в админ-чат (однократно при старте)
+        try:
+            from bot.utils.error_notifier import notify_error_text
+            await notify_error_text("🧪 Нотификатор активен: бот запущен")
+        except Exception:
+            pass
         
         # Инициализируем WebSocket соединения для всех пользователей с ключами
         logger.info("Initializing WebSocket connections for users...")

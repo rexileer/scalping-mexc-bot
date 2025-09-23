@@ -32,15 +32,17 @@ class ErrorReportingMiddleware(BaseMiddleware):
                 command = text.split()[0] if text.startswith("/") else "сообщение"
                 human_message = parse_mexc_error(e)
 
-                # Notify admins
-                await notify_user_command_error(user_id, command, human_message)
+                # Admin notification
+                try:
+                    await notify_user_command_error(user_id, command, human_message)
+                except Exception:
+                    pass
 
-                # Optional: inform user
+                # Best-effort reply to user
                 try:
                     await event.answer("Произошла ошибка. Попробуйте ещё раз позже.")
                 except Exception:
                     pass
-
                 return None
 
             # Callback handlers
@@ -48,17 +50,20 @@ class ErrorReportingMiddleware(BaseMiddleware):
                 user_id = event.from_user.id if event.from_user else "unknown"
                 data_str = (event.data or "")[:100]
                 human_message = parse_mexc_error(e)
-                await notify_component_error(
-                    component="командных обработчиках",
-                    human_message=f"Ошибка при обработке нажатия кнопки: {data_str}\n{human_message}",
-                )
+                try:
+                    await notify_component_error(
+                        component="командных обработчиках",
+                        human_message=f"Ошибка при обработке нажатия кнопки: {data_str}\n{human_message}",
+                    )
+                except Exception:
+                    pass
                 try:
                     await event.answer("Произошла ошибка", show_alert=False)
                 except Exception:
                     pass
                 return None
 
-            # Fallback: attempt generic notification
+            # Fallback
             try:
                 await notify_component_error(
                     component="боте",
