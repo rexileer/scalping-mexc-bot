@@ -7,6 +7,7 @@ import os
 from django.conf import settings
 
 from aiogram import Bot
+from asgiref.sync import sync_to_async
 from bot.utils.api_errors import parse_mexc_error, ERROR_MESSAGES
 
 
@@ -93,31 +94,53 @@ def _build_message(lines: list[str]) -> str:
     return "\n".join(safe_lines)
 
 
+async def _resolve_user_mention(user_id: Union[int, str]) -> str:
+    try:
+        tid = int(user_id)
+    except Exception:
+        return f"ID {user_id}"
+    try:
+        from users.models import User
+        user = await User.objects.filter(telegram_id=tid).afirst()
+        name = (user.name if user else None) or str(tid)
+        username = name.strip()
+        if not username:
+            return f"ID {tid}"
+        if not username.startswith('@'):
+            username = f"@{username}"
+        return username
+    except Exception:
+        return f"ID {tid}"
+
+
 async def notify_user_command_error(user_id: int | str, command: str, human_message: str) -> None:
+    mention = await _resolve_user_mention(user_id)
     text = _build_message([
-        f"Ошибка у пользователя {user_id}:",
-        f"После вызова команды {command}",
-        human_message,
+        "🚨 <b>Ошибка</b>",
+        f"👤 Пользователь: {mention}",
+        f"🧩 Команда: <code>{command}</code>",
+        f"❗ <b>Детали</b>: {human_message}",
     ])
     await notify_error_text(text)
 
 
 async def notify_component_error(component: str, human_message: str) -> None:
     text = _build_message([
-        "Ошибка",
-        f"В {component}",
-        human_message,
+        "🚨 <b>Ошибка</b>",
+        f"🧩 Компонент: {component}",
+        f"❗ <b>Детали</b>: {human_message}",
     ])
     await notify_error_text(text)
 
 
 async def notify_user_autobuy_error(user_id: int | str, stage: str, exc: Exception) -> None:
     mexc_hint = parse_mexc_error(exc)
+    mention = await _resolve_user_mention(user_id)
     text = _build_message([
-        f"Ошибка у пользователя {user_id}",
-        f"В цикле автобая",
-        f"Произошла ошибка {stage}:",
-        f"{mexc_hint}",
+        "🚨 <b>Ошибка</b>",
+        f"👤 Пользователь: {mention}",
+        f"⚙️ Автобай: {stage}",
+        f"❗ <b>Детали</b>: {mexc_hint}",
     ])
     await notify_error_text(text)
 
@@ -165,13 +188,14 @@ class TelegramErrorHandler(logging.Handler):
                     user_id = extracted
             lines: list[str] = []
             if user_id is not None:
-                lines.append(f"Ошибка у пользователя {user_id}:")
+                # Will resolve mention in async sender
+                lines.append("__USER_PLACEHOLDER__")
             else:
-                lines.append("Ошибка")
+                lines.append("🚨 <b>Ошибка</b>")
             if command:
-                lines.append(f"После вызова команды {command}")
+                lines.append(f"🧩 Команда: <code>{command}</code>")
             elif component:
-                lines.append(f"В {component}")
+                lines.append(f"🧩 Компонент: {component}")
 
             message_text = raw_message
 
@@ -204,8 +228,19 @@ class TelegramErrorHandler(logging.Handler):
             text = _build_message(lines)
 
             async def _send():
+                # Resolve mention if needed
+                if "__USER_PLACEHOLDER__" in lines:
+                    mention = await _resolve_user_mention(user_id)
+                    header = _build_message([
+                        "🚨 <b>Ошибка</b>",
+                        f"👤 Пользователь: {mention}",
+                    ])
+                    final_lines = [header] + [ln for ln in lines if ln != "__USER_PLACEHOLDER__"]
+                    final_text = _build_message(final_lines)
+                else:
+                    final_text = text
                 for chat_id in chat_ids:
-                    await _send_direct_message(chat_id, text, parse_mode="HTML")
+                    await _send_direct_message(chat_id, final_text, parse_mode="HTML")
 
             try:
                 loop = asyncio.get_running_loop()
