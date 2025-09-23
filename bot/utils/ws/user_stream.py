@@ -73,7 +73,7 @@ async def listen_user_messages_impl(manager: Any, user_id: int):
                             from bot.utils.ws.subscriptions import subscribe_user_orders
                             await subscribe_user_orders(manager, user_id)
                         except Exception as e:
-                    logger.error(f"[UserWS] Resubscribe failed for user {user_id}: {e}")
+                            logger.error(f"[UserWS] Resubscribe failed for user {user_id}: {e}")
                     try:
                         await notify_component_error("вебсокетах (пользователь)", f"Ошибка переподписки пользователя {user_id}: {e}")
                     except Exception:
