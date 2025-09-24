@@ -192,6 +192,7 @@ class TelegramErrorHandler(logging.Handler):
                 lines.append("__USER_PLACEHOLDER__")
             else:
                 lines.append("🚨 <b>Ошибка</b>")
+                lines.append("🗂️ Тип: Общая")
             if command:
                 lines.append(f"🧩 Команда: <code>{command}</code>")
             elif component:
