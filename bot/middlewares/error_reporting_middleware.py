@@ -31,6 +31,12 @@ class ErrorReportingMiddleware(BaseMiddleware):
                 text = event.text or ""
                 command = text.split()[0] if text.startswith("/") else "сообщение"
                 human_message = parse_mexc_error(e)
+                # Добавим user_id в extras, чтобы лог-хэндлер мог привязать пользователя
+                try:
+                    from bot.logger import logger
+                    logger.error(f"Handler error for {command}: {human_message}", exc_info=True, extra={"user_id": user_id})
+                except Exception:
+                    pass
 
                 # Admin notification
                 try:
@@ -50,6 +56,11 @@ class ErrorReportingMiddleware(BaseMiddleware):
                 user_id = event.from_user.id if event.from_user else "unknown"
                 data_str = (event.data or "")[:100]
                 human_message = parse_mexc_error(e)
+                try:
+                    from bot.logger import logger
+                    logger.error(f"Callback error: {human_message}", exc_info=True, extra={"user_id": user_id})
+                except Exception:
+                    pass
                 try:
                     await notify_component_error(
                         component="командных обработчиках",

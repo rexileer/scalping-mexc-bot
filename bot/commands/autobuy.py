@@ -571,7 +571,7 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
                 logger.info(f"Установлена пауза {pause_seconds}с после покупки на росте для {telegram_id}")
 
         except Exception as e:
-            logger.error(f"Ошибка в процессе выполнения покупки для {telegram_id}: {e}")
+            logger.error(f"Ошибка в процессе выполнения покупки для {telegram_id}: {e}", extra={"user_id": telegram_id})
             error_message = parse_mexc_error(e)
             await message.answer(f"❌ Ошибка при покупке: {error_message}")
             try:

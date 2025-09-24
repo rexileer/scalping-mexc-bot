@@ -79,7 +79,7 @@ async def get_user_price(message: Message):
         await message.answer(response_text)
     except Exception as e:
         # Логируем и отправляем пользователю общую ошибку
-        logger.error(f"Произошла ошибка при получении цены: {e}")
+        logger.error(f"Произошла ошибка при получении цены: {e}", extra={"user_id": user_id})
         response_text = "Произошла ошибка при получении цены."
         success = False
         await message.answer(response_text)
@@ -177,7 +177,7 @@ async def balance_handler(message: Message):
         logger.info(f"User {user.telegram_id} requested balance and orders.")
 
     except Exception as e:
-        logger.error(f"Ошибка при получении баланса для пользователя {message.from_user.id}: {e}", exc_info=True)
+        logger.error(f"Ошибка при получении баланса для пользователя {message.from_user.id}: {e}", exc_info=True, extra={"user_id": user_id})
         response_text = "Произошла ошибка при получении баланса."
         success = False
         await message.answer(response_text)
@@ -314,7 +314,7 @@ async def buy_handler(message: Message):
         # Статус будет обновляться автоматически через WebSocket
 
     except Exception as e:
-        logger.exception("Ошибка при выполнении /buy")
+        logger.exception("Ошибка при выполнении /buy", extra={"user_id": user_id})
         response_text = f"❌ {parse_mexc_error(e)}"
         success = False
         await message.answer(response_text)
