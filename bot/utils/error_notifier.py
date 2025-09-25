@@ -2,6 +2,8 @@ import asyncio
 import logging
 import re
 from typing import Optional, List, Union
+import time
+import hashlib
 
 import os
 from django.conf import settings
@@ -198,7 +200,7 @@ class TelegramErrorHandler(logging.Handler):
             elif component:
                 lines.append(f"🧩 Компонент: {component}")
 
-            message_text = raw_message
+            message_text = _sanitize_text(raw_message)
 
             # If exception, enrich message; prefer human-friendly MEXC hint if any
             if record.exc_info and record.exc_info[1]:
@@ -240,6 +242,10 @@ class TelegramErrorHandler(logging.Handler):
                     final_text = _build_message(final_lines)
                 else:
                     final_text = text
+
+                # Deduplicate frequent identical messages
+                if not _should_send(final_text):
+                    return
                 for chat_id in chat_ids:
                     await _send_direct_message(chat_id, final_text, parse_mode="HTML")
 
@@ -310,5 +316,42 @@ class TelegramErrorHandler(logging.Handler):
                 except ValueError:
                     continue
         return None
+
+
+# --- Helpers: sanitization and deduplication ---
+_recent_messages: dict[str, float] = {}
+
+def _should_send(text: str) -> bool:
+    """Return True if this text hasn't been sent in the dedup window."""
+    window = float(os.getenv('NOTIFY_DEDUP_SECONDS', '20'))
+    if window <= 0:
+        return True
+    now = time.time()
+    key = hashlib.sha256(text.encode('utf-8')).hexdigest()
+    last = _recent_messages.get(key, 0)
+    if now - last < window:
+        return False
+    _recent_messages[key] = now
+    # Cleanup occasionally
+    if len(_recent_messages) > 512:
+        cutoff = now - window
+        for k, ts in list(_recent_messages.items()):
+            if ts < cutoff:
+                _recent_messages.pop(k, None)
+    return True
+
+
+def _sanitize_text(text: str) -> str:
+    """Mask sensitive tokens like signatures, API keys/secrets in messages."""
+    if not text:
+        return text
+    # Mask signature=...
+    text = re.sub(r'(signature=)[0-9a-fA-F]+', r'\1***', text)
+    # Mask API key headers/fields
+    text = re.sub(r'(X-MEXC-APIKEY[:=]\s*)([A-Za-z0-9_-]+)', r'\1***', text, flags=re.IGNORECASE)
+    text = re.sub(r'("?api_key"?\s*[:=]\s*["\'])([^"\']+)(["\'])', r'\1***\3', text, flags=re.IGNORECASE)
+    text = re.sub(r'("?apiSecret"?\s*[:=]\s*["\'])([^"\']+)(["\'])', r'\1***\3', text, flags=re.IGNORECASE)
+    text = re.sub(r'("?api_secret"?\s*[:=]\s*["\'])([^"\']+)(["\'])', r'\1***\3', text, flags=re.IGNORECASE)
+    return text
 
 

@@ -22,11 +22,11 @@ def get_actual_order_status(user: User, symbol: str, order_id: str) -> str:
             loop.run_until_complete(_asyncio.sleep(0))
             loop.close()
         if not isinstance(response, dict):
-            logger.error(f"⚠️ Ответ не является dict: {type(response)} — {response}")
+            logger.error(f"⚠️ Ответ не является dict: {type(response)} — {response}", extra={"user_id": getattr(user, 'telegram_id', None)})
             return "ERROR"
         return response.get("status", "UNKNOWN")
     except Exception as e:
-        logger.exception(f"Ошибка при получении статуса ордера {order_id}: {e}")
+        logger.exception(f"Ошибка при получении статуса ордера {order_id}: {e}", extra={"user_id": getattr(user, 'telegram_id', None)})
         return "ERROR"
 
 # Синхронная версия для обратной совместимости
