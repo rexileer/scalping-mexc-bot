@@ -23,11 +23,11 @@ def get_actual_order_status(user: User, symbol: str, order_id: str) -> str:
             loop.close()
         if not isinstance(response, dict):
             logger.error(f"⚠️ Ответ не является dict: {type(response)} — {response}", extra={"user_id": getattr(user, 'telegram_id', None)})
-            return "ERROR"
+            return None
         return response.get("status", "UNKNOWN")
     except Exception as e:
         logger.exception(f"Ошибка при получении статуса ордера {order_id}: {e}", extra={"user_id": getattr(user, 'telegram_id', None)})
-        return "ERROR"
+        return None
 
 # Синхронная версия для обратной совместимости
 def check_mexc_keys(api_key: str, api_secret: str) -> tuple:

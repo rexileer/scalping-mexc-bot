@@ -83,6 +83,26 @@ async def update_order_status(order_id: str, symbol: str, status: str, user_id: 
         # Если сделка найдена, передаем информацию в автобай (независимо от смены статуса)
         if deal and effective_user_id:
             await handle_autobuy_order_update(order_id, symbol, status, effective_user_id)
+        elif effective_user_id and status in ("NEW", "PARTIALLY_FILLED"):
+            # Если сделки нет в БД, но пришло активное состояние по WS — инициируем мягкий ресинк памяти из БД
+            try:
+                from bot.commands.autobuy import autobuy_states
+                from asgiref.sync import sync_to_async
+                missing_deal = await sync_to_async(lambda: Deal.objects.filter(order_id=order_id, user__telegram_id=effective_user_id).first())()
+                if missing_deal and effective_user_id in autobuy_states:
+                    active_orders = autobuy_states[effective_user_id].get('active_orders', [])
+                    if not any(o.get('order_id') == order_id for o in active_orders):
+                        active_orders.append({
+                            "order_id": order_id,
+                            "buy_price": float(missing_deal.buy_price),
+                            "notified": False,
+                            "user_order_number": missing_deal.user_order_number,
+                        })
+                        autobuy_states[effective_user_id]['active_orders'] = active_orders
+                        from bot.logger import logger as _l
+                        _l.info(f"[WS-Resync] Added missing active order {order_id} to memory for user {effective_user_id}")
+            except Exception:
+                pass
 
         # Если статус изменился и сделка найдена, отправляем уведомление
         if status_changed and deal:

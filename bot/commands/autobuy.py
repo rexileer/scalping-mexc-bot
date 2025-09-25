@@ -69,7 +69,9 @@ async def autobuy_loop(message: Message, telegram_id: int):
                     'last_pause_price': None,  # Последняя цена во время паузы
                     'rise_buy_count': 0,  # Счетчик покупок на росте в текущем цикле
                     'last_ask_price': None,  # Последняя ask цена для анализа триггеров
-                    'last_mid_price': None  # Последняя mid цена для анализа тренда
+                    'last_mid_price': None,  # Последняя mid цена для анализа тренда
+                    'buy_in_progress': False,  # Глобальный флаг покупки
+                    'buy_lock': asyncio.Lock(),  # Глобальная блокировка покупки на пользователя
                 }
 
             # Восстанавливаем активные ордера из БД
@@ -162,6 +164,19 @@ async def autobuy_loop(message: Message, telegram_id: int):
                             except Exception as e:
                                 logger.error(f"Failed to send drop notification to {telegram_id}: {e}")
                             
+                            # Перед запуском покупки проверяем очередь в памяти и в БД, а также флаг покупки
+                            state = autobuy_states.get(telegram_id, {})
+                            if state.get('buy_in_progress'):
+                                logger.info(f"Skip price_drop buy: buy_in_progress for {telegram_id}")
+                                return
+                            if state.get('active_orders'):
+                                logger.info(f"Skip price_drop buy: active_orders exist for {telegram_id}")
+                                return
+                            has_active = await sync_to_async(Deal.objects.filter(user=user, is_autobuy=True, status__in=["NEW", "PARTIALLY_FILLED"]).exists)()
+                            if has_active:
+                                logger.info(f"Skip price_drop buy: DB has active orders for {telegram_id}")
+                                return
+
                             # Create a fake message object for process_buy
                             from bot.utils.autobuy_restart import FakeMessage
                             from bot.config import bot_instance
@@ -236,8 +251,13 @@ async def autobuy_loop(message: Message, telegram_id: int):
 
                     # Запускаем новую покупку, если нет активных ордеров
                     if not autobuy_states[telegram_id]['active_orders']:
-                        # await message.answer(f"🔄 Возобновляем автобай после паузы (основной цикл). Текущая цена: {autobuy_states[telegram_id]['current_price']}")
-                        await process_buy(telegram_id, "after_waiting_period_main_loop", message, user)
+                        # Дополнительная проверка в БД на активные сделки autobuy
+                        has_active = await sync_to_async(Deal.objects.filter(user=user, is_autobuy=True, status__in=["NEW", "PARTIALLY_FILLED"]).exists)()
+                        if has_active:
+                            logger.info(f"DB guard: активные сделки обнаружены для {telegram_id}, покупка не запускается")
+                        else:
+                            # await message.answer(f"🔄 Возобновляем автобай после паузы (основной цикл). Текущая цена: {autobuy_states[telegram_id]['current_price']}")
+                            await process_buy(telegram_id, "after_waiting_period_main_loop", message, user)
 
                 # Просто ждем, реальная работа происходит в колбэках
                 await asyncio.sleep(10)  # Проверка подписки и состояния каждые 10 секунд
@@ -370,12 +390,23 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
     # Получаем актуальные настройки пользователя из БД
     user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
 
-    # Используем Lock для предотвращения множественных покупок одновременно
-    lock = asyncio.Lock()
-
-    if not await lock.acquire():
-        logger.warning(f"Не удалось получить блокировку для покупки - {telegram_id}")
+    # Глобальная защита на пользователя
+    state = autobuy_states.get(telegram_id)
+    if not state:
+        logger.warning(f"No state for user {telegram_id} in process_buy")
         return
+
+    lock = state.get('buy_lock')
+    if lock is None:
+        lock = asyncio.Lock()
+        state['buy_lock'] = lock
+
+    if state.get('buy_in_progress'):
+        logger.info(f"Skip process_buy: buy_in_progress for {telegram_id}")
+        return
+
+    await lock.acquire()
+    state['buy_in_progress'] = True
 
     try:
         # Еще раз проверяем, что пользователь все еще в режиме автобай
@@ -605,8 +636,14 @@ async def process_buy(telegram_id: int, reason: str, message: Message, user: Use
         except Exception:
             pass
     finally:
-        # Всегда освобождаем блокировку
-        lock.release()
+        # Всегда освобождаем блокировку и сбрасываем флаг
+        try:
+            state['buy_in_progress'] = False
+        finally:
+            try:
+                lock.release()
+            except RuntimeError:
+                pass
 
 
 async def check_rise_triggers(telegram_id: int, symbol: str, bid_price: float, ask_price: float, is_rise: bool, current_time: float, user_settings: User):

@@ -34,6 +34,7 @@ async def _reconcile_user_orders(user: User) -> None:
             open_orders = await asyncio.wait_for(asyncio.to_thread(client.open_orders, symbol=symbol), timeout=20)
         except Exception as e:
             logger.warning(f"[Reconciler] open_orders failed for user {user.telegram_id}: {e}")
+            # При ошибке не мутируем БД; пусть следующая итерация или WS восстановит состояние
             open_orders = []
 
         # Map and update
@@ -54,7 +55,9 @@ async def _reconcile_user_orders(user: User) -> None:
             if order_id not in api_by_id:
                 try:
                     api_status = await sync_to_async(get_actual_order_status)(user, deal.symbol, deal.order_id)
-                    if api_status and api_status != deal.status:
+                    # Persist only known, valid terminal/active statuses; ignore None/unknown/error
+                    allowed_statuses = {"NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED"}
+                    if api_status in allowed_statuses and api_status != deal.status:
                         deal.status = api_status
                         await sync_to_async(deal.save)()
                 except Exception as e:

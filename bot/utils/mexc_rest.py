@@ -35,7 +35,7 @@ class MexcRestClient:
             self._last_time_sync = now
 
     async def _request(self, method: str, path: str, params: Optional[Dict[str, Any]] = None,
-                       signed: bool = False, timeout_sec: int = 20, recv_window_ms: int = 15000) -> Dict[str, Any]:
+                       signed: bool = False, timeout_sec: int = 20, recv_window_ms: int = 60000) -> Dict[str, Any]:
         params = params.copy() if params else {}
         headers = {}
 
