@@ -87,7 +87,6 @@ async def update_order_status(order_id: str, symbol: str, status: str, user_id: 
             # Если сделки нет в БД, но пришло активное состояние по WS — инициируем мягкий ресинк памяти из БД
             try:
                 from bot.commands.autobuy import autobuy_states
-                from asgiref.sync import sync_to_async
                 missing_deal = await sync_to_async(lambda: Deal.objects.filter(order_id=order_id, user__telegram_id=effective_user_id).first())()
                 if missing_deal and effective_user_id in autobuy_states:
                     active_orders = autobuy_states[effective_user_id].get('active_orders', [])
