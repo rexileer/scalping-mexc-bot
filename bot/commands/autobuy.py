@@ -169,13 +169,6 @@ async def autobuy_loop(message: Message, telegram_id: int):
                             if state.get('buy_in_progress'):
                                 logger.info(f"Skip price_drop buy: buy_in_progress for {telegram_id}")
                                 return
-                            if state.get('active_orders'):
-                                logger.info(f"Skip price_drop buy: active_orders exist for {telegram_id}")
-                                return
-                            has_active = await sync_to_async(Deal.objects.filter(user=user, is_autobuy=True, status__in=["NEW", "PARTIALLY_FILLED"]).exists)()
-                            if has_active:
-                                logger.info(f"Skip price_drop buy: DB has active orders for {telegram_id}")
-                                return
 
                             # Create a fake message object for process_buy
                             from bot.utils.autobuy_restart import FakeMessage
