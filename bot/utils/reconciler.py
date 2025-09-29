@@ -5,7 +5,8 @@ from typing import Dict, List
 from asgiref.sync import sync_to_async
 from bot.logger import logger
 from users.models import User, Deal
-from bot.utils.mexc import get_user_client, get_actual_order_status
+from bot.utils.mexc_rest import MexcRestClient
+from bot.utils.websocket_handlers import update_order_status
 
 
 async def _reconcile_user_orders(user: User) -> None:
@@ -17,54 +18,77 @@ async def _reconcile_user_orders(user: User) -> None:
 
         # Collect active deals from DB
         active_deals: List[Deal] = await sync_to_async(list)(
-            Deal.objects.filter(user=user, status__in=["NEW", "PARTIALLY_FILLED"]).order_by("-created_at")
+            Deal.objects.filter(
+                user=user, status__in=["NEW", "PARTIALLY_FILLED"]
+            ).order_by("-created_at")
         )
         if not active_deals:
             return
 
-        # Fetch open orders from REST for the configured pair
+        # Fetch open orders from REST for the configured pair (async client with time sync and recvWindow)
         try:
-            client, symbol = get_user_client(user.telegram_id)
+            client = MexcRestClient(user.api_key, user.api_secret)
+            symbol = (user.pair or "").replace("/", "")
+            # Primary attempt
+            open_orders = await client.open_orders(symbol)
         except Exception as e:
-            logger.warning(f"[Reconciler] Failed to get client for user {user.telegram_id}: {e}")
-            return
-
-        try:
-            # Offload blocking SDK call to thread to avoid event loop starvation, with timeout
-            open_orders = await asyncio.wait_for(asyncio.to_thread(client.open_orders, symbol=symbol), timeout=20)
-        except Exception as e:
-            logger.warning(f"[Reconciler] open_orders failed for user {user.telegram_id}: {e}")
-            # При ошибке не мутируем БД; пусть следующая итерация или WS восстановит состояние
-            open_orders = []
+            # Retry once using local timestamp by forcing zero offset (avoid /api/v3/time dependency)
+            try:
+                setattr(client, "_time_offset_ms", 0)
+                setattr(client, "_last_time_sync", time.time())
+                open_orders = await client.open_orders(symbol)
+            except Exception as e2:
+                logger.warning(
+                    f"[Reconciler] open_orders failed for user {user.telegram_id}: {e2}"
+                )
+                # При ошибке не мутируем БД; пусть следующая итерация или WS восстановит состояние
+                open_orders = []
 
         # Map and update
         deals_by_id: Dict[str, Deal] = {d.order_id: d for d in active_deals}
-        api_by_id: Dict[str, Dict] = {str(o.get("orderId")): o for o in open_orders if o.get("orderId")}
+        api_by_id: Dict[str, Dict] = {
+            str(o.get("orderId")): o for o in open_orders if o.get("orderId")
+        }
 
-        # First, update deals that are present in open_orders
+        # First, update deals that are present in open_orders (centralized updater with notifications)
         for order_id, order in api_by_id.items():
             if order_id in deals_by_id:
-                deal = deals_by_id[order_id]
                 current_status = order.get("status")
-                if current_status and current_status != deal.status:
-                    deal.status = current_status
-                    await sync_to_async(deal.save)()
+                if current_status:
+                    await update_order_status(
+                        order_id, symbol, current_status, user_id=user.telegram_id
+                    )
 
-        # Then, for DB-active deals that are missing in open_orders, confirm status via query_order
+        # Then, for DB-active deals that are missing in open_orders, confirm status via query_order (centralized updater)
         for order_id, deal in deals_by_id.items():
             if order_id not in api_by_id:
                 try:
-                    api_status = await sync_to_async(get_actual_order_status)(user, deal.symbol, deal.order_id)
-                    # Persist only known, valid terminal/active statuses; ignore None/unknown/error
-                    allowed_statuses = {"NEW", "PARTIALLY_FILLED", "FILLED", "CANCELED", "REJECTED"}
-                    if api_status in allowed_statuses and api_status != deal.status:
-                        deal.status = api_status
-                        await sync_to_async(deal.save)()
+                    resp = await client.query_order(symbol, {"orderId": order_id})
+                    api_status = resp.get("status")
+                    if api_status:
+                        await update_order_status(
+                            order_id, symbol, api_status, user_id=user.telegram_id
+                        )
                 except Exception as e:
-                    logger.warning(f"[Reconciler] query_order failed for {order_id} (user {user.telegram_id}): {e}")
+                    # Retry once with local timestamp fallback
+                    try:
+                        setattr(client, "_time_offset_ms", 0)
+                        setattr(client, "_last_time_sync", time.time())
+                        resp = await client.query_order(symbol, {"orderId": order_id})
+                        api_status = resp.get("status")
+                        if api_status:
+                            await update_order_status(
+                                order_id, symbol, api_status, user_id=user.telegram_id
+                            )
+                    except Exception as e2:
+                        logger.warning(
+                            f"[Reconciler] query_order failed for {order_id} (user {user.telegram_id}): {e2}"
+                        )
 
     except Exception as e:
-        logger.error(f"[Reconciler] Unexpected error for user {getattr(user, 'telegram_id', 'unknown')}: {e}")
+        logger.error(
+            f"[Reconciler] Unexpected error for user {getattr(user, 'telegram_id', 'unknown')}: {e}"
+        )
 
 
 async def order_status_reconciler_loop(poll_interval_seconds: int = 60) -> None:
@@ -78,7 +102,10 @@ async def order_status_reconciler_loop(poll_interval_seconds: int = 60) -> None:
         start_ts = time.time()
         try:
             users = await sync_to_async(list)(
-                User.objects.exclude(api_key__isnull=True).exclude(api_key='').exclude(api_secret__isnull=True).exclude(api_secret='')
+                User.objects.exclude(api_key__isnull=True)
+                .exclude(api_key="")
+                .exclude(api_secret__isnull=True)
+                .exclude(api_secret="")
             )
             for user in users:
                 await _reconcile_user_orders(user)
@@ -89,8 +116,3 @@ async def order_status_reconciler_loop(poll_interval_seconds: int = 60) -> None:
         elapsed = time.time() - start_ts
         sleep_for = max(5, poll_interval_seconds - int(elapsed))
         await asyncio.sleep(sleep_for)
-
-
-
-
-
