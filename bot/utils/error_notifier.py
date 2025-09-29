@@ -14,9 +14,9 @@ from bot.utils.api_errors import parse_mexc_error, ERROR_MESSAGES
 
 
 def _parse_chat_id(raw: str) -> Union[int, str]:
-    raw = (raw or '').strip()
+    raw = (raw or "").strip()
     if not raw:
-        return ''
+        return ""
     try:
         return int(raw)
     except (TypeError, ValueError):
@@ -25,38 +25,44 @@ def _parse_chat_id(raw: str) -> Union[int, str]:
 
 def _get_notification_chat_ids() -> List[Union[int, str]]:
     # Preferred plural env/setting
-    candidates = (
-        getattr(settings, 'NOTIFICATION_CHAT_IDS', None)
-        or os.getenv('NOTIFICATION_CHAT_IDS')
+    candidates = getattr(settings, "NOTIFICATION_CHAT_IDS", None) or os.getenv(
+        "NOTIFICATION_CHAT_IDS"
     )
 
     # Fallbacks: single chat and channel ids
     if not candidates:
-        single = getattr(settings, 'NOTIFICATION_CHAT_ID', None) or os.getenv('NOTIFICATION_CHAT_ID')
-        channel = getattr(settings, 'NOTIFICATION_CHANNEL_ID', None) or os.getenv('NOTIFICATION_CHANNEL_ID')
+        single = getattr(settings, "NOTIFICATION_CHAT_ID", None) or os.getenv(
+            "NOTIFICATION_CHAT_ID"
+        )
+        channel = getattr(settings, "NOTIFICATION_CHANNEL_ID", None) or os.getenv(
+            "NOTIFICATION_CHANNEL_ID"
+        )
         parts = [p for p in [single, channel] if p]
-        candidates = ','.join(parts)
+        candidates = ",".join(parts)
 
     if not candidates:
         return []
 
     # Support comma/semicolon separated list
-    raw_parts = [p for chunk in str(candidates).split(';') for p in chunk.split(',')]
+    raw_parts = [p for chunk in str(candidates).split(";") for p in chunk.split(",")]
     ids: List[Union[int, str]] = []
     for token in raw_parts:
         parsed = _parse_chat_id(token)
-        if parsed != '':
+        if parsed != "":
             ids.append(parsed)
     return ids
 
 
-async def _send_direct_message(chat_id: int | str, text: str, parse_mode: str = "HTML") -> None:
+async def _send_direct_message(
+    chat_id: int | str, text: str, parse_mode: str = "HTML"
+) -> None:
     """Send message via main bot instance if available; fallback to a temporary Bot."""
     try:
         # Try global bot instance first (more reliable within running loop)
         try:
             from bot import config as _config
-            bot = getattr(_config, 'bot_instance', None)
+
+            bot = getattr(_config, "bot_instance", None)
         except Exception:
             bot = None
 
@@ -103,47 +109,58 @@ async def _resolve_user_mention(user_id: Union[int, str]) -> str:
         return f"ID {user_id}"
     try:
         from users.models import User
+
         user = await User.objects.filter(telegram_id=tid).afirst()
         name = (user.name if user else None) or str(tid)
         username = name.strip()
         if not username:
             return f"ID {tid}"
-        if not username.startswith('@'):
+        if not username.startswith("@"):
             username = f"@{username}"
         return username
     except Exception:
         return f"ID {tid}"
 
 
-async def notify_user_command_error(user_id: int | str, command: str, human_message: str) -> None:
+async def notify_user_command_error(
+    user_id: int | str, command: str, human_message: str
+) -> None:
     mention = await _resolve_user_mention(user_id)
-    text = _build_message([
-        "🚨 <b>Ошибка</b>",
-        f"👤 Пользователь: {mention}",
-        f"🧩 Команда: <code>{command}</code>",
-        f"❗ <b>Детали</b>: {human_message}",
-    ])
+    text = _build_message(
+        [
+            "🚨 <b>Ошибка</b>",
+            f"👤 Пользователь: {mention}",
+            f"🧩 Команда: <code>{command}</code>",
+            f"❗ <b>Детали</b>: {human_message}",
+        ]
+    )
     await notify_error_text(text)
 
 
 async def notify_component_error(component: str, human_message: str) -> None:
-    text = _build_message([
-        "🚨 <b>Ошибка</b>",
-        f"🧩 Компонент: {component}",
-        f"❗ <b>Детали</b>: {human_message}",
-    ])
+    text = _build_message(
+        [
+            "🚨 <b>Ошибка</b>",
+            f"🧩 Компонент: {component}",
+            f"❗ <b>Детали</b>: {human_message}",
+        ]
+    )
     await notify_error_text(text)
 
 
-async def notify_user_autobuy_error(user_id: int | str, stage: str, exc: Exception) -> None:
+async def notify_user_autobuy_error(
+    user_id: int | str, stage: str, exc: Exception
+) -> None:
     mexc_hint = parse_mexc_error(exc)
     mention = await _resolve_user_mention(user_id)
-    text = _build_message([
-        "🚨 <b>Ошибка</b>",
-        f"👤 Пользователь: {mention}",
-        f"⚙️ Автобай: {stage}",
-        f"❗ <b>Детали</b>: {mexc_hint}",
-    ])
+    text = _build_message(
+        [
+            "🚨 <b>Ошибка</b>",
+            f"👤 Пользователь: {mention}",
+            f"⚙️ Автобай: {stage}",
+            f"❗ <b>Детали</b>: {mexc_hint}",
+        ]
+    )
     await notify_error_text(text)
 
 
@@ -168,19 +185,22 @@ class TelegramErrorHandler(logging.Handler):
             # 1) Only forward real exceptions
             if not record.exc_info:
                 return
+            # Suppress noisy REST-related transient errors to avoid chat spam
+            if _is_noise(record):
+                return
 
             # 2) Ignore technical log entries from bot_logging (command logs)
-            pathname = getattr(record, 'pathname', '') or ''
-            if 'bot_logging.py' in pathname:
+            pathname = getattr(record, "pathname", "") or ""
+            if "bot_logging.py" in pathname:
                 return
 
             # 3) Ignore synthetic messages like "Выполнил команду"
-            raw_message = record.getMessage() or ''
-            if 'Выполнил команду' in raw_message:
+            raw_message = record.getMessage() or ""
+            if "Выполнил команду" in raw_message:
                 return
 
             # Continue composing message
-            user_id = getattr(record, 'user_id', None)
+            user_id = getattr(record, "user_id", None)
             component = self._detect_component(record)
             command = self._detect_command(record)
             # Try extract user id from message text if not provided
@@ -206,10 +226,12 @@ class TelegramErrorHandler(logging.Handler):
             if record.exc_info and record.exc_info[1]:
                 try:
                     mexc_hint = parse_mexc_error(record.exc_info[1])
-                    if mexc_hint and mexc_hint != str(record.exc_info[1]):
-                        lines.append(mexc_hint)
-                    else:
-                        lines.append(message_text)
+                    details_text = (
+                        mexc_hint
+                        if (mexc_hint and mexc_hint != str(record.exc_info[1]))
+                        else message_text
+                    )
+                    lines.append(f"❗ <b>Детали</b>: {details_text}")
                 except Exception:
                     lines.append(message_text)
             else:
@@ -220,7 +242,7 @@ class TelegramErrorHandler(logging.Handler):
                         code = int(code_match.group(1))
                         human = ERROR_MESSAGES.get(code)
                         if human:
-                            lines.append(f"{human}")
+                            lines.append(f"❗ <b>Детали</b>: {human}")
                         else:
                             lines.append(message_text)
                     else:
@@ -234,11 +256,15 @@ class TelegramErrorHandler(logging.Handler):
                 # Resolve mention if needed
                 if "__USER_PLACEHOLDER__" in lines:
                     mention = await _resolve_user_mention(user_id)
-                    header = _build_message([
-                        "🚨 <b>Ошибка</b>",
-                        f"👤 Пользователь: {mention}",
-                    ])
-                    final_lines = [header] + [ln for ln in lines if ln != "__USER_PLACEHOLDER__"]
+                    header = _build_message(
+                        [
+                            "🚨 <b>Ошибка</b>",
+                            f"👤 Пользователь: {mention}",
+                        ]
+                    )
+                    final_lines = [header] + [
+                        ln for ln in lines if ln != "__USER_PLACEHOLDER__"
+                    ]
                     final_text = _build_message(final_lines)
                 else:
                     final_text = text
@@ -262,38 +288,47 @@ class TelegramErrorHandler(logging.Handler):
 
     @staticmethod
     def _detect_component(record: logging.LogRecord) -> Optional[str]:
-        pathname = getattr(record, 'pathname', '') or ''
-        module_name = getattr(record, 'module', '') or ''
+        pathname = getattr(record, "pathname", "") or ""
+        module_name = getattr(record, "module", "") or ""
 
-        if 'websocket_manager.py' in pathname or module_name == 'websocket_manager':
-            return 'Вебсокет менеджере'
-        if 'websocket_monitor.py' in pathname or module_name == 'websocket_monitor':
-            return 'Вебсокет менеджере'
-        if 'websocket_handlers.py' in pathname or module_name == 'websocket_handlers':
-            return 'Вебсокет менеджере'
-        if 'ws/market_stream.py' in pathname or module_name == 'market_stream':
-            return 'В вебсокетах (рынок)'
-        if 'ws/user_stream.py' in pathname or module_name == 'user_stream':
-            return 'В вебсокетах (пользователь)'
-        if 'autobuy.py' in pathname or module_name == 'autobuy':
-            return 'цикле автобая'
-        if 'trading.py' in pathname or module_name == 'trading':
-            return 'командных обработчиках'
+        if "websocket_manager.py" in pathname or module_name == "websocket_manager":
+            return "Вебсокет менеджере"
+        if "websocket_monitor.py" in pathname or module_name == "websocket_monitor":
+            return "Вебсокет менеджере"
+        if "websocket_handlers.py" in pathname or module_name == "websocket_handlers":
+            return "Вебсокет менеджере"
+        if "ws/market_stream.py" in pathname or module_name == "market_stream":
+            return "В вебсокетах (рынок)"
+        if "ws/user_stream.py" in pathname or module_name == "user_stream":
+            return "В вебсокетах (пользователь)"
+        if "autobuy.py" in pathname or module_name == "autobuy":
+            return "цикле автобая"
+        if "trading.py" in pathname or module_name == "trading":
+            return "командных обработчиках"
+        if (
+            "mexc_rest.py" in pathname
+            or module_name == "mexc_rest"
+            or "mexc.py" in pathname
+            or module_name == "mexc"
+        ):
+            return "REST-клиент MEXC"
+        if "reconciler.py" in pathname or module_name == "reconciler":
+            return "Реконсайлер статусов ордеров"
         return None
 
     @staticmethod
     def _detect_command(record: logging.LogRecord) -> Optional[str]:
-        func = getattr(record, 'funcName', '') or ''
+        func = getattr(record, "funcName", "") or ""
         # Common handlers mapping
         mapping = {
-            'balance_handler': '/balance',
-            'buy_handler': '/buy',
-            'autobuy_handler': '/autobuy',
-            'stop_autobuy': '/stop',
-            'status_handler': '/status',
-            'ask_stats_period': '/stats',
-            'bot_start': '/start',
-            'get_user_price': '/price',
+            "balance_handler": "/balance",
+            "buy_handler": "/buy",
+            "autobuy_handler": "/autobuy",
+            "stop_autobuy": "/stop",
+            "status_handler": "/status",
+            "ask_stats_period": "/stats",
+            "bot_start": "/start",
+            "get_user_price": "/price",
         }
         return mapping.get(func)
 
@@ -302,11 +337,11 @@ class TelegramErrorHandler(logging.Handler):
         if not message_text:
             return None
         patterns = [
-            r'пользовател[яе]\s+(\d+)',
-            r'user\s+(\d+)',
-            r'user_id\D+(\d+)',
-            r'telegram_id\D+(\d+)',
-            r'для\s+пользователя\s+(\d+)',
+            r"пользовател[яе]\s+(\d+)",
+            r"user\s+(\d+)",
+            r"user_id\D+(\d+)",
+            r"telegram_id\D+(\d+)",
+            r"для\s+пользователя\s+(\d+)",
         ]
         for pat in patterns:
             m = re.search(pat, message_text, re.IGNORECASE)
@@ -321,13 +356,14 @@ class TelegramErrorHandler(logging.Handler):
 # --- Helpers: sanitization and deduplication ---
 _recent_messages: dict[str, float] = {}
 
+
 def _should_send(text: str) -> bool:
     """Return True if this text hasn't been sent in the dedup window."""
-    window = float(os.getenv('NOTIFY_DEDUP_SECONDS', '20'))
+    window = float(os.getenv("NOTIFY_DEDUP_SECONDS", "20"))
     if window <= 0:
         return True
     now = time.time()
-    key = hashlib.sha256(text.encode('utf-8')).hexdigest()
+    key = hashlib.sha256(text.encode("utf-8")).hexdigest()
     last = _recent_messages.get(key, 0)
     if now - last < window:
         return False
@@ -346,12 +382,90 @@ def _sanitize_text(text: str) -> str:
     if not text:
         return text
     # Mask signature=...
-    text = re.sub(r'(signature=)[0-9a-fA-F]+', r'\1***', text)
+    text = re.sub(r"(signature=)[0-9a-fA-F]+", r"\1***", text)
     # Mask API key headers/fields
-    text = re.sub(r'(X-MEXC-APIKEY[:=]\s*)([A-Za-z0-9_-]+)', r'\1***', text, flags=re.IGNORECASE)
-    text = re.sub(r'("?api_key"?\s*[:=]\s*["\'])([^"\']+)(["\'])', r'\1***\3', text, flags=re.IGNORECASE)
-    text = re.sub(r'("?apiSecret"?\s*[:=]\s*["\'])([^"\']+)(["\'])', r'\1***\3', text, flags=re.IGNORECASE)
-    text = re.sub(r'("?api_secret"?\s*[:=]\s*["\'])([^"\']+)(["\'])', r'\1***\3', text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"(X-MEXC-APIKEY[:=]\s*)([A-Za-z0-9_-]+)", r"\1***", text, flags=re.IGNORECASE
+    )
+    text = re.sub(
+        r'("?api_key"?\s*[:=]\s*["\'])([^"\']+)(["\'])',
+        r"\1***\3",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r'("?apiSecret"?\s*[:=]\s*["\'])([^"\']+)(["\'])',
+        r"\1***\3",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r'("?api_secret"?\s*[:=]\s*["\'])([^"\']+)(["\'])',
+        r"\1***\3",
+        text,
+        flags=re.IGNORECASE,
+    )
     return text
 
 
+def _is_noise(record: logging.LogRecord) -> bool:
+    """
+    Heuristics to suppress noisy, self-healing REST errors from notification chat.
+    Keeps critical errors visible while reducing spam.
+    """
+    # Filter by source modules/files: only REST/reconciler stack
+    pathname = (getattr(record, "pathname", "") or "").lower()
+    module = (getattr(record, "module", "") or "").lower()
+    is_rest_stack = any(
+        p in pathname
+        for p in (
+            "bot/utils/mexc_rest.py",
+            "bot/utils/mexc.py",
+            "bot/utils/reconciler.py",
+        )
+    ) or module in ("mexc_rest", "mexc", "reconciler")
+
+    if not is_rest_stack:
+        return False
+
+    # Only consider real exceptions
+    if not record.exc_info:
+        return False
+
+    # Exception classes considered as transient noise
+    exc_type = record.exc_info[0]
+    noisy_types: tuple[type, ...] = (asyncio.TimeoutError, asyncio.CancelledError)
+    try:
+        import aiohttp  # type: ignore
+
+        noisy_types = noisy_types + (
+            aiohttp.ServerDisconnectedError,
+            aiohttp.ClientOSError,
+            aiohttp.ClientConnectorError,
+        )
+    except Exception:
+        pass
+
+    try:
+        if isinstance(exc_type, type) and issubclass(exc_type, noisy_types):
+            return True
+    except Exception:
+        # Defensive: if issubclass fails for any reason, continue to text checks
+        pass
+
+    msg = (record.getMessage() or "").lower()
+
+    # Timestamp window errors (recvWindow / 700003) — time drift; we auto-resync
+    if (
+        "recvwindow" in msg
+        or '"code":700003' in msg
+        or 'code": 700003' in msg
+        or "700003" in msg
+    ):
+        return True
+
+    # Server time endpoint timeout — common on network blips
+    if "/api/v3/time" in msg:
+        return True
+
+    return False
