@@ -48,7 +48,7 @@ class MexcRestClient:
         params: Optional[Dict[str, Any]] = None,
         signed: bool = False,
         timeout_sec: int = 20,
-        recv_window_ms: int = 120000,
+        recv_window_ms: int = 59000,
     ) -> Dict[str, Any]:
         params = params.copy() if params else {}
         headers = {}
@@ -63,6 +63,9 @@ class MexcRestClient:
                 if isinstance(v, (float, int)):
                     sign_params[k] = str(v)
             if "recvWindow" not in sign_params and recv_window_ms:
+                # Clamp to allowed maximum (< 60000)
+                if int(recv_window_ms) >= 60000:
+                    recv_window_ms = 59000
                 sign_params["recvWindow"] = str(recv_window_ms)
             sign_base = urlencode(sign_params, quote_via=quote)
             to_sign = (
