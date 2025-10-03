@@ -74,6 +74,9 @@ class BaseParametersTest(TestCase):
     
     def test_base_parameters_singleton(self):
         """Тест что создается только одна запись"""
+        # Удаляем все существующие записи
+        BaseParameters.objects.all().delete()
+        
         params1 = BaseParameters.objects.create(
             profit=1.5,
             pause=60,
