@@ -4,9 +4,6 @@
 import os
 import django
 
-# Импортируем mock для mexc-sdk
-import mock_mexc
-
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
 django.setup()
 

@@ -11,21 +11,21 @@ ERROR: Could not install packages due to an OSError: [Errno 2] No such file or d
 ## Решение
 
 ### 1. Создан отдельный requirements файл для тестов
-- **`requirements-test.txt`** - без локальных зависимостей
-- Исключен `mexc-sdk @ file:///app/mexc-sdk-1.0.0`
+- **`requirements-test.txt`** - без локальной ссылки на mexc-sdk
+- Позволяет устанавливать зависимости без ошибок
 
 ### 2. Обновлен GitHub Actions workflow
-- Использует `requirements-test.txt` вместо `requirements.txt`
-- Добавлена проверка наличия `mexc-sdk-1.0.0` директории
-- Установка mexc-sdk только если директория существует
+- **Сначала** устанавливается mexc-sdk из локальной директории `mexc-sdk-1.0.0`
+- **Затем** устанавливаются остальные зависимости из `requirements-test.txt`
+- Проверка наличия директории mexc-sdk перед установкой
 
-### 3. Создан mock для mexc-sdk
-- **`tests/mock_mexc.py`** - mock модуль для тестов
-- Избегает ImportError при отсутствии mexc-sdk
+### 3. Возвращен mexc-sdk в requirements.txt
+- Для работы в Docker контейнерах (production)
+- `mexc-sdk @ file:///app/mexc-sdk-1.0.0`
 
 ### 4. Обновлены тесты
-- Все тесты импортируют `mock_mexc`
-- Добавлен `test_basic.py` - тесты без внешних зависимостей
+- Убран mock для mexc-sdk (не нужен, т.к. SDK устанавливается)
+- Добавлен `test_basic.py` - базовые тесты Django
 - Обновлен `pytest.ini` с pythonpath
 
 ### 5. Обновлен .gitignore
@@ -36,22 +36,23 @@ ERROR: Could not install packages due to an OSError: [Errno 2] No such file or d
 
 ### Новые файлы:
 - `requirements-test.txt` - тестовые зависимости
-- `tests/mock_mexc.py` - mock для mexc-sdk
 - `tests/test_basic.py` - базовые тесты
 - `CICD_FIX.md` - этот файл
 
 ### Измененные файлы:
-- `.github/workflows/ci-cd.yml` - обновлен workflow
-- `requirements.txt` - закомментирован mexc-sdk
-- `tests/test_*.py` - добавлен импорт mock
+- `.github/workflows/ci-cd.yml` - обновлен workflow с установкой mexc-sdk
+- `requirements.txt` - восстановлен mexc-sdk для Docker
 - `pytest.ini` - добавлен pythonpath
 - `.gitignore` - добавлены исключения
 
+### Удаленные файлы:
+- `tests/mock_mexc.py` - больше не нужен
+
 ## Результат
 
-✅ Тесты теперь работают без mexc-sdk  
+✅ mexc-sdk устанавливается из локальной директории в GitHub Actions  
+✅ mexc-sdk работает в Docker контейнерах (production)  
 ✅ GitHub Actions не падает на установке зависимостей  
-✅ Mock позволяет тестам работать независимо  
 ✅ CI/CD pipeline готов к использованию  
 ✅ Все тесты проходят успешно (12 тестов)  
 

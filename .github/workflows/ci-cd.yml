@@ -38,19 +38,20 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
       
+      - name: Install mexc-sdk from local directory
+        run: |
+          if [ -d "mexc-sdk-1.0.0" ]; then
+            echo "Installing mexc-sdk from local directory"
+            pip install ./mexc-sdk-1.0.0
+          else
+            echo "ERROR: mexc-sdk-1.0.0 directory not found!"
+            exit 1
+          fi
+          
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-test.txt
-          
-      - name: Check for mexc-sdk directory
-        run: |
-          if [ -d "mexc-sdk-1.0.0" ]; then
-            echo "mexc-sdk-1.0.0 found, installing locally"
-            pip install ./mexc-sdk-1.0.0
-          else
-            echo "mexc-sdk-1.0.0 not found, using mock in tests"
-          fi
       
       - name: Create .env file
         run: |
