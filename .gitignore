@@ -61,5 +61,7 @@ htmlcov/
 
 # Docker
 *.pid
+
+# Project specific
 /memory-bank
 ngrok.exe
