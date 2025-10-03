@@ -77,21 +77,28 @@ class BaseParametersTest(TestCase):
         # Удаляем все существующие записи
         BaseParameters.objects.all().delete()
         
+        # Создаем первую запись
         params1 = BaseParameters.objects.create(
             profit=1.5,
             pause=60,
             loss=2.0,
             buy_amount=Decimal('10.00')
         )
-        params2 = BaseParameters.objects.create(
+        self.assertEqual(BaseParameters.objects.count(), 1)
+        
+        # Создаем вторую запись (должна обновить первую)
+        params2 = BaseParameters(
             profit=2.0,
             pause=120,
             loss=3.0,
             buy_amount=Decimal('20.00')
         )
+        params2.save()
+        
         # Должна быть только одна запись
         self.assertEqual(BaseParameters.objects.count(), 1)
         # Должна быть обновлена первая запись
         params = BaseParameters.objects.first()
         self.assertEqual(params.profit, 2.0)
+        self.assertEqual(params.pause, 120)
 
