@@ -1106,9 +1106,9 @@ async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
                     f"[AutobuyOrderUpdate] User {user_id}: Updated last_buy_price to {most_recent_order['buy_price']} from active order #{most_recent_order['user_order_number']}. Active orders count: {len(active_orders)}"
                 )
         else:
-            # logger.info(
-            #     f"[AutobuyOrderUpdate] User {user_id}: Order {order_id} status is {status} (not FILLED/CANCELED). No state change."
-            # )
+            logger.debug(
+                f"[AutobuyOrderUpdate] User {user_id}: Order {order_id} status is {status} (not FILLED/CANCELED). No state change."
+            )
     else:
         logger.info(
             f"[AutobuyOrderUpdate] User {user_id}: Order {order_id} not found in active_orders."
