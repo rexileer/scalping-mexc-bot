@@ -2,6 +2,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 import asyncio
+
 # from bot.commands.buy import monitor_order
 from bot.commands.autobuy import autobuy_loop
 from bot.utils.mexc import get_user_client
@@ -14,25 +15,31 @@ from bot.keyboards.inline import get_period_keyboard, get_pagination_keyboard
 from asgiref.sync import sync_to_async
 from bot.utils.mexc_rest import MexcRestClient
 from django.utils.timezone import localtime
-from bot.utils.mexc import handle_mexc_response, get_actual_order_status
+from bot.utils.mexc import handle_mexc_response
 from bot.utils.api_errors import parse_mexc_error
 from bot.utils.bot_logging import log_command
 import math
 
 router = Router()
 
+
 # /price
 @router.message(Command("price"))
 async def get_user_price(message: Message):
     user_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name or str(user_id)
+    username = (
+        message.from_user.username or message.from_user.first_name or str(user_id)
+    )
     command = "/price"
     response_text = ""
     success = True
 
     try:
         # Получаем пользователя и пару (без блокировки thread_sensitive)
-        user = await asyncio.wait_for(asyncio.to_thread(User.objects.get, telegram_id=message.from_user.id), timeout=10)
+        user = await asyncio.wait_for(
+            asyncio.to_thread(User.objects.get, telegram_id=message.from_user.id),
+            timeout=10,
+        )
         pair = user.pair
 
         # Проверяем, что валидная пара получена
@@ -45,7 +52,7 @@ async def get_user_price(message: Message):
         api_secret = user.api_secret or ""
         rest = MexcRestClient(api_key=api_key, api_secret=api_secret)
         ticker = await asyncio.wait_for(rest.ticker_price(pair), timeout=10)
-        current_price = ticker['price']
+        current_price = ticker["price"]
 
         # Формируем начальный ответ
         response_text = f"Цена {pair}: {current_price}"
@@ -79,7 +86,9 @@ async def get_user_price(message: Message):
         await message.answer(response_text)
     except Exception as e:
         # Логируем и отправляем пользователю общую ошибку
-        logger.error(f"Произошла ошибка при получении цены: {e}", extra={"user_id": user_id})
+        logger.error(
+            f"Произошла ошибка при получении цены: {e}", extra={"user_id": user_id}
+        )
         response_text = "Произошла ошибка при получении цены."
         success = False
         await message.answer(response_text)
@@ -93,15 +102,17 @@ async def get_user_price(message: Message):
         extra_data={
             "username": username,
             "chat_id": message.chat.id,
-            "pair": pair if 'pair' in locals() else None
-        }
+            "pair": pair if "pair" in locals() else None,
+        },
     )
 
 
 @router.message(Command("balance"))
 async def balance_handler(message: Message):
     user_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name or str(user_id)
+    username = (
+        message.from_user.username or message.from_user.first_name or str(user_id)
+    )
     command = "/balance"
     response_text = ""
     success = True
@@ -109,7 +120,10 @@ async def balance_handler(message: Message):
 
     try:
         logger.info("/balance: fetching user from DB...")
-        user = await asyncio.wait_for(sync_to_async(User.objects.get)(telegram_id=message.from_user.id), timeout=10)
+        user = await asyncio.wait_for(
+            sync_to_async(User.objects.get)(telegram_id=message.from_user.id),
+            timeout=10,
+        )
         logger.info("/balance: user fetched, reading pair/keys...")
         pair = user.pair
         extra_data["pair"] = pair
@@ -136,13 +150,13 @@ async def balance_handler(message: Message):
 
         balances_message = "💰 <b>БАЛАНС</b>\n"
 
-        for balance in account_info['balances']:
-            asset = balance['asset']
+        for balance in account_info["balances"]:
+            asset = balance["asset"]
             if asset not in relevant_assets:
                 continue
 
-            free = float(balance['free'])
-            locked = float(balance['locked'])
+            free = float(balance["free"])
+            locked = float(balance["locked"])
 
             balances_message += (
                 f"\n<b>{asset}</b>\n"
@@ -161,9 +175,13 @@ async def balance_handler(message: Message):
         open_orders_count = len(orders)
         extra_data["open_orders_count"] = open_orders_count
 
-        total_order_amount = sum([float(order['origQty']) for order in orders])
-        total_order_value = sum([float(order['price']) * float(order['origQty']) for order in orders])
-        avg_price = total_order_value / total_order_amount if total_order_amount > 0 else 0
+        total_order_amount = sum([float(order["origQty"]) for order in orders])
+        total_order_value = sum(
+            [float(order["price"]) * float(order["origQty"]) for order in orders]
+        )
+        avg_price = (
+            total_order_value / total_order_amount if total_order_amount > 0 else 0
+        )
 
         orders_message = (
             f"\n\n📄 <b>Ордера</b>\n"
@@ -177,7 +195,11 @@ async def balance_handler(message: Message):
         logger.info(f"User {user.telegram_id} requested balance and orders.")
 
     except Exception as e:
-        logger.error(f"Ошибка при получении баланса для пользователя {message.from_user.id}: {e}", exc_info=True, extra={"user_id": user_id})
+        logger.error(
+            f"Ошибка при получении баланса для пользователя {message.from_user.id}: {e}",
+            exc_info=True,
+            extra={"user_id": user_id},
+        )
         response_text = "Произошла ошибка при получении баланса."
         success = False
         await message.answer(response_text)
@@ -188,7 +210,7 @@ async def balance_handler(message: Message):
         command=command,
         response=response_text,
         success=success,
-        extra_data=extra_data
+        extra_data=extra_data,
     )
 
 
@@ -196,7 +218,9 @@ async def balance_handler(message: Message):
 @router.message(Command("buy"))
 async def buy_handler(message: Message):
     user_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name or str(user_id)
+    username = (
+        message.from_user.username or message.from_user.first_name or str(user_id)
+    )
     command = "/buy"
     response_text = ""
     success = True
@@ -218,7 +242,9 @@ async def buy_handler(message: Message):
         extra_data["buy_amount"] = buy_amount
 
         # 1. Создаём ордер
-        buy_order = await rest.new_order(symbol, "BUY", "MARKET", {"quoteOrderQty": buy_amount})
+        buy_order = await rest.new_order(
+            symbol, "BUY", "MARKET", {"quoteOrderQty": buy_amount}
+        )
         handle_mexc_response(buy_order, "Покупка через /buy")
 
         order_id = buy_order["orderId"]
@@ -268,7 +294,9 @@ async def buy_handler(message: Message):
         handle_mexc_response(sell_order, "Продажа")
         sell_order_id = sell_order["orderId"]
         extra_data["sell_order_id"] = sell_order_id
-        logger.info(f"SELL ордер {sell_order_id} выставлен на {sell_price:.6f} {symbol[3:]}")
+        logger.info(
+            f"SELL ордер {sell_order_id} выставлен на {sell_price:.6f} {symbol[3:]}"
+        )
 
         # 6. Сохраняем ордер в базу
         # Получаем следующий номер
@@ -285,7 +313,7 @@ async def buy_handler(message: Message):
             buy_price=real_price,
             quantity=executed_qty,
             sell_price=sell_price,
-            status="NEW"
+            status="NEW",
         )
 
         # 6.1 Уточняем начальный статус через REST сразу после создания SELL
@@ -296,7 +324,9 @@ async def buy_handler(message: Message):
                 deal.status = current_status
                 await sync_to_async(deal.save)()
         except Exception as e:
-            logger.warning(f"Не удалось уточнить начальный статус ордера {sell_order_id}: {e}")
+            logger.warning(
+                f"Не удалось уточнить начальный статус ордера {sell_order_id}: {e}"
+            )
 
         # 7. Отправляем ответ
         response_text = (
@@ -308,7 +338,9 @@ async def buy_handler(message: Message):
         )
         await message.answer(response_text, parse_mode="Markdown")
 
-        logger.info(f"BUY + SELL for {user.telegram_id}: {executed_qty} {symbol} @ {real_price} -> {sell_price}")
+        logger.info(
+            f"BUY + SELL for {user.telegram_id}: {executed_qty} {symbol} @ {real_price} -> {sell_price}"
+        )
 
         # 8. Не запускаем мониторинг - WebSocket будет отслеживать изменения
         # Статус будет обновляться автоматически через WebSocket
@@ -325,7 +357,7 @@ async def buy_handler(message: Message):
         command=command,
         response=response_text,
         success=success,
-        extra_data=extra_data
+        extra_data=extra_data,
     )
 
 
@@ -333,7 +365,9 @@ async def buy_handler(message: Message):
 @router.message(Command("autobuy"))
 async def autobuy_handler(message: Message):
     user_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name or str(user_id)
+    username = (
+        message.from_user.username or message.from_user.first_name or str(user_id)
+    )
     command = "/autobuy"
     response_text = ""
     success = True
@@ -351,7 +385,6 @@ async def autobuy_handler(message: Message):
 
         user.autobuy = True
         await sync_to_async(user.save)()
-
 
         # В конце успешного выполнения:
         response_text = "🟢 Автобай запущен"
@@ -373,14 +406,17 @@ async def autobuy_handler(message: Message):
         command=command,
         response=response_text,
         success=success,
-        extra_data=extra_data
+        extra_data=extra_data,
     )
+
 
 # /stop
 @router.message(Command("stop"))
 async def stop_autobuy(message: Message):
     user_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name or str(user_id)
+    username = (
+        message.from_user.username or message.from_user.first_name or str(user_id)
+    )
     command = "/stop"
     response_text = ""
     success = True
@@ -390,7 +426,10 @@ async def stop_autobuy(message: Message):
         telegram_id = message.from_user.id
 
         # Если есть задача для пользователя, отменяем её
-        if telegram_id in user_autobuy_tasks and not user_autobuy_tasks[telegram_id].done():
+        if (
+            telegram_id in user_autobuy_tasks
+            and not user_autobuy_tasks[telegram_id].done()
+        ):
             user_autobuy_tasks[telegram_id].cancel()
             logger.info(f"Autobuy task for user {telegram_id} cancelled")
 
@@ -414,14 +453,17 @@ async def stop_autobuy(message: Message):
         command=command,
         response=response_text,
         success=success,
-        extra_data=extra_data
+        extra_data=extra_data,
     )
+
 
 # /status
 @router.message(Command("status"))
 async def status_handler(message: Message):
     user_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name or str(user_id)
+    username = (
+        message.from_user.username or message.from_user.first_name or str(user_id)
+    )
     command = "/status"
     response_text = ""
     success = True
@@ -444,8 +486,9 @@ async def status_handler(message: Message):
         command=command,
         response="Запрошен статус ордеров",
         success=success,
-        extra_data=extra_data
+        extra_data=extra_data,
     )
+
 
 # Обработчик пагинации для функции status
 @router.callback_query(F.data.startswith("status_page:"))
@@ -470,18 +513,25 @@ async def status_pagination_handler(callback: CallbackQuery):
         # Получаем данные для отображения
         user = await sync_to_async(User.objects.get)(telegram_id=user_id)
 
-        header = "🔁 <b>Автобай запущен.</b>" if user.autobuy else "⚠️ <b>Автобай не запущен.</b>"
+        header = (
+            "🔁 <b>Автобай запущен.</b>"
+            if user.autobuy
+            else "⚠️ <b>Автобай не запущен.</b>"
+        )
 
         # Получаем активные ордера из базы (без обновления статусов)
-        active_deals = await sync_to_async(list)(Deal.objects.filter(
-            user=user,
-            status__in=["PARTIALLY_FILLED", "NEW"]
-        ).order_by("-created_at"))
+        active_deals = await sync_to_async(list)(
+            Deal.objects.filter(
+                user=user, status__in=["PARTIALLY_FILLED", "NEW"]
+            ).order_by("-created_at")
+        )
 
         # Расчет параметров пагинации
         orders_per_page = 10  # Максимальное количество ордеров на странице
         total_orders = len(active_deals)
-        total_pages = math.ceil(total_orders / orders_per_page) if total_orders > 0 else 1
+        total_pages = (
+            math.ceil(total_orders / orders_per_page) if total_orders > 0 else 1
+        )
 
         # Валидация страницы
         if page < 1:
@@ -514,7 +564,9 @@ async def status_pagination_handler(callback: CallbackQuery):
 
                     current_chunk += formatted
                 except Exception as e:
-                    logger.error(f"Ошибка при обработке сделки {deal.user_order_number}: {e}")
+                    logger.error(
+                        f"Ошибка при обработке сделки {deal.user_order_number}: {e}"
+                    )
                     continue
         else:
             current_chunk += "\n\nУ вас нет активных ордеров."
@@ -530,18 +582,18 @@ async def status_pagination_handler(callback: CallbackQuery):
         # Редактируем сообщение напрямую
         try:
             await callback.message.edit_text(
-                text=current_chunk,
-                parse_mode="HTML",
-                reply_markup=keyboard
+                text=current_chunk, parse_mode="HTML", reply_markup=keyboard
             )
-            logger.info(f"Успешно отредактировано сообщение для пользователя {user_id}, страница {page}")
+            logger.info(
+                f"Успешно отредактировано сообщение для пользователя {user_id}, страница {page}"
+            )
         except Exception as e:
-            logger.error(f"Ошибка при редактировании через callback: {e}", exc_info=True)
+            logger.error(
+                f"Ошибка при редактировании через callback: {e}", exc_info=True
+            )
             # Если не удалось отредактировать, отправляем новое сообщение
             await callback.message.answer(
-                text=current_chunk,
-                parse_mode="HTML",
-                reply_markup=keyboard
+                text=current_chunk, parse_mode="HTML", reply_markup=keyboard
             )
 
         # Отвечаем на callback, чтобы убрать часы загрузки
@@ -551,13 +603,18 @@ async def status_pagination_handler(callback: CallbackQuery):
         logger.error(f"Ошибка при обработке пагинации: {e}", exc_info=True)
         await callback.answer("Произошла ошибка")
 
+
 # Функция для отображения страницы статуса ордеров
 async def show_status_page(message, user_id, page=1, check_status=True):
     try:
         # Получаем информацию о пользователе
         user = await sync_to_async(User.objects.get)(telegram_id=user_id)
 
-        header = "🔁 <b>Автобай запущен.</b>" if user.autobuy else "⚠️ <b>Автобай не запущен.</b>"
+        header = (
+            "🔁 <b>Автобай запущен.</b>"
+            if user.autobuy
+            else "⚠️ <b>Автобай не запущен.</b>"
+        )
 
         # Ордера для отображения
         active_deals = []
@@ -565,45 +622,73 @@ async def show_status_page(message, user_id, page=1, check_status=True):
         # Если запрошено обновление статусов - получаем данные из API
         if check_status:
             try:
-                # Получаем клиента для пользователя
-                client = None
+                # Создаём async REST клиента для пользователя
+                rest_client = None
                 symbol = None
                 try:
-                    client, pair = await sync_to_async(get_user_client)(user_id)
-                    symbol = pair  # Используем пару из настроек пользователя
+                    symbol = (user.pair or "").replace("/", "")
+                    rest_client = MexcRestClient(user.api_key, user.api_secret)
                 except Exception as e:
-                    logger.error(f"Ошибка при получении клиента: {e}")
+                    logger.error(f"Ошибка при создании REST клиента: {e}")
 
-                # Если клиент получен успешно, запрашиваем все открытые ордера пользователя
-                if client and symbol:
+                # Если клиент создан успешно, запрашиваем все открытые ордера пользователя
+                if rest_client and symbol:
                     # Получаем все ордера пользователя из базы
-                    user_deals = await sync_to_async(list)(Deal.objects.filter(user=user))
+                    user_deals = await sync_to_async(list)(
+                        Deal.objects.filter(user=user)
+                    )
 
                     # Создаем словарь для быстрого поиска ордеров по ID
                     deals_by_id = {deal.order_id: deal for deal in user_deals}
 
                     # Получаем все открытые ордера для пары из API
                     try:
-                        # mexc_sdk call is synchronous; offload to thread and guard with timeout
-                        open_orders = await asyncio.wait_for(asyncio.to_thread(client.open_orders, symbol=symbol), timeout=20)
-                        logger.info(f"Получено {len(open_orders)} открытых ордеров для пользователя {user_id}")
+                        # Async REST call with timeout
+                        open_orders = await asyncio.wait_for(
+                            rest_client.open_orders(symbol), timeout=20
+                        )
+                        logger.info(
+                            f"Получено {len(open_orders)} открытых ордеров для пользователя {user_id}"
+                        )
 
                         # Создаем множество ID ордеров из API для быстрой проверки
-                        api_order_ids = {str(order['orderId']) for order in open_orders}
+                        api_order_ids = {str(order["orderId"]) for order in open_orders}
 
                         # Ищем ордера, которые были NEW в базе, но не найдены в API
                         for deal_id, deal in deals_by_id.items():
-                            if deal.status in ["NEW", "PARTIALLY_FILLED"] and deal_id not in api_order_ids:
-                                # Проверяем статус через API для подтверждения
-                                api_status = await sync_to_async(get_actual_order_status)(
-                                    user, deal.symbol, deal.order_id
-                                )
+                            if (
+                                deal.status in ["NEW", "PARTIALLY_FILLED"]
+                                and deal_id not in api_order_ids
+                            ):
+                                # Проверяем статус через API для подтверждения (async safe)
+                                try:
+                                    resp = await asyncio.wait_for(
+                                        rest_client.query_order(
+                                            deal.symbol, {"orderId": deal.order_id}
+                                        ),
+                                        timeout=10,
+                                    )
+                                    api_status = (
+                                        resp.get("status")
+                                        if isinstance(resp, dict)
+                                        else None
+                                    )
+                                except Exception as e:
+                                    logger.warning(
+                                        f"Failed to query order {deal_id}: {e}"
+                                    )
+                                    api_status = None
 
                                 # Если ордер не найден или завершен, отмечаем как SKIPPED
-                                if api_status == "ERROR" or api_status not in ["NEW", "PARTIALLY_FILLED"]:
+                                if not api_status or api_status not in [
+                                    "NEW",
+                                    "PARTIALLY_FILLED",
+                                ]:
                                     deal.status = "SKIPPED"
                                     await sync_to_async(deal.save)()
-                                    logger.info(f"Ордер {deal_id} помечен как SKIPPED (не найден в API)")
+                                    logger.info(
+                                        f"Ордер {deal_id} помечен как SKIPPED (не найден в API)"
+                                    )
                                 else:
                                     # Обновляем статус из API
                                     deal.status = api_status
@@ -611,8 +696,8 @@ async def show_status_page(message, user_id, page=1, check_status=True):
 
                         # Обновляем статусы в базе и формируем список активных ордеров
                         for order in open_orders:
-                            order_id = str(order['orderId'])
-                            current_status = order['status']
+                            order_id = str(order["orderId"])
+                            current_status = order["status"]
 
                             # Проверяем, есть ли ордер в нашей базе
                             if order_id in deals_by_id:
@@ -627,35 +712,42 @@ async def show_status_page(message, user_id, page=1, check_status=True):
                                     active_deals.append(deal)
                             else:
                                 # Этот ордер не в нашей базе, возможно это ордер созданный в другом месте
-                                logger.info(f"Найден ордер {order_id}, которого нет в базе данных")
+                                logger.info(
+                                    f"Найден ордер {order_id}, которого нет в базе данных"
+                                )
 
                     except Exception as e:
                         logger.error(f"Ошибка при получении открытых ордеров: {e}")
 
                 # После всех проверок через API получаем активные ордера из базы
-                active_deals = await sync_to_async(list)(Deal.objects.filter(
-                    user=user,
-                    status__in=["PARTIALLY_FILLED", "NEW"]
-                ).order_by("-created_at"))
+                active_deals = await sync_to_async(list)(
+                    Deal.objects.filter(
+                        user=user, status__in=["PARTIALLY_FILLED", "NEW"]
+                    ).order_by("-created_at")
+                )
 
             except Exception as e:
                 logger.error(f"Ошибка при обновлении статусов: {e}")
                 # Продолжаем с данными из базы
-                active_deals = await sync_to_async(list)(Deal.objects.filter(
-                    user=user,
-                    status__in=["PARTIALLY_FILLED", "NEW"]
-                ).order_by("-created_at"))
+                active_deals = await sync_to_async(list)(
+                    Deal.objects.filter(
+                        user=user, status__in=["PARTIALLY_FILLED", "NEW"]
+                    ).order_by("-created_at")
+                )
         else:
             # Если не обновляем статусы, просто получаем активные ордера из базы
-            active_deals = await sync_to_async(list)(Deal.objects.filter(
-                user=user,
-                status__in=["PARTIALLY_FILLED", "NEW"]
-            ).order_by("-created_at"))
+            active_deals = await sync_to_async(list)(
+                Deal.objects.filter(
+                    user=user, status__in=["PARTIALLY_FILLED", "NEW"]
+                ).order_by("-created_at")
+            )
 
         # Расчет параметров пагинации
         orders_per_page = 10  # Максимальное количество ордеров на странице
         total_orders = len(active_deals)
-        total_pages = math.ceil(total_orders / orders_per_page) if total_orders > 0 else 1
+        total_pages = (
+            math.ceil(total_orders / orders_per_page) if total_orders > 0 else 1
+        )
 
         # Валидация страницы
         if page < 1:
@@ -688,7 +780,9 @@ async def show_status_page(message, user_id, page=1, check_status=True):
 
                     current_chunk += formatted
                 except Exception as e:
-                    logger.error(f"Ошибка при обработке сделки {deal.user_order_number}: {e}")
+                    logger.error(
+                        f"Ошибка при обработке сделки {deal.user_order_number}: {e}"
+                    )
                     continue
         else:
             current_chunk += "\n\nУ вас нет активных ордеров."
@@ -704,23 +798,31 @@ async def show_status_page(message, user_id, page=1, check_status=True):
         # Проверяем тип сообщения и соответственно отправляем или редактируем
         if isinstance(message, Message):
             # Если это команда /status, отправляем новое сообщение
-            sent_message = await message.answer(current_chunk, parse_mode="HTML",
-                                              reply_markup=keyboard)
+            sent_message = await message.answer(
+                current_chunk, parse_mode="HTML", reply_markup=keyboard
+            )
             return sent_message
         else:
             # Если это редактирование после нажатия на кнопку, редактируем существующее
             try:
-                logger.info(f"Редактирование сообщения для пользователя {user_id}, страница {page}")
-                await message.edit_text(current_chunk, parse_mode="HTML",
-                                       reply_markup=keyboard)
+                logger.info(
+                    f"Редактирование сообщения для пользователя {user_id}, страница {page}"
+                )
+                await message.edit_text(
+                    current_chunk, parse_mode="HTML", reply_markup=keyboard
+                )
                 return message
             except Exception as e:
-                logger.error(f"Ошибка при редактировании сообщения: {e}, тип: {type(e)}", exc_info=True)
+                logger.error(
+                    f"Ошибка при редактировании сообщения: {e}, тип: {type(e)}",
+                    exc_info=True,
+                )
                 # В случае ошибки редактирования пробуем отправить новое сообщение
                 # Используем message.answer вместо message.chat.send_message
                 try:
-                    sent_message = await message.answer(current_chunk, parse_mode="HTML",
-                                              reply_markup=keyboard)
+                    sent_message = await message.answer(
+                        current_chunk, parse_mode="HTML", reply_markup=keyboard
+                    )
                     logger.info("Отправлено новое сообщение вместо редактирования")
                     return sent_message
                 except Exception as new_e:
@@ -746,7 +848,9 @@ async def show_status_page(message, user_id, page=1, check_status=True):
 @router.message(Command("stats"))
 async def ask_stats_period(message: Message):
     user_id = message.from_user.id
-    username = message.from_user.username or message.from_user.first_name or str(user_id)
+    username = (
+        message.from_user.username or message.from_user.first_name or str(user_id)
+    )
     command = "/stats"
     response_text = "Выберите период для статистики:"
     success = True
@@ -769,8 +873,9 @@ async def ask_stats_period(message: Message):
         command=command,
         response=response_text,
         success=success,
-        extra_data=extra_data
+        extra_data=extra_data,
     )
+
 
 # Обработчик для неактивных кнопок
 @router.callback_query(F.data == "dummy_callback")
