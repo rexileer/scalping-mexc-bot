@@ -1002,7 +1002,7 @@ async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
 
     # Отладочный лог с полным состоянием
     logger.info(
-        f"[AutobuyOrderUpdate] User {user_id}: Processing order_id={order_id}, symbol={symbol}, status={status}. Current Autobuy State: {autobuy_states[user_id]}"
+        f"[AutobuyOrderUpdate] User {user_id}: Processing order_id={order_id}, symbol={symbol}, status={status}."
     )
 
     active_orders = autobuy_states[user_id]["active_orders"]
@@ -1027,7 +1027,7 @@ async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
             active_orders.pop(order_index)
             autobuy_states[user_id]["active_orders"] = active_orders
             logger.info(
-                f"[AutobuyOrderUpdate] User {user_id}: active_orders after removal: {autobuy_states[user_id]['active_orders']}"
+                f"[AutobuyOrderUpdate] User {user_id}: active_orders after removal: {len(active_orders)}"
             )
 
             # Устанавливаем триггер для покупок на росте после КАЖДОЙ продажи
@@ -1111,7 +1111,7 @@ async def process_order_update_for_autobuy(order_id, symbol, status, user_id):
             )
     else:
         logger.info(
-            f"[AutobuyOrderUpdate] User {user_id}: Order {order_id} not found in active_orders. Current active_orders: {active_orders}"
+            f"[AutobuyOrderUpdate] User {user_id}: Order {order_id} not found in active_orders."
         )
 
     # Лог изменений
