@@ -358,15 +358,15 @@ class MexcWebSocketManager:
             self.reset_reconnect_attempts("user", user_id)
             return True
 
-            except Exception as e:
-                logger.error(f"Error connecting user {user_id} to WebSocket: {e}", exc_info=True)
-                # Увеличиваем счетчик попыток
-                self.increment_reconnect_attempts("user", user_id)
-                try:
-                    await notify_component_error("Вебсокет менеджере", f"Ошибка подключения пользователя {user_id}: {e}")
-                except Exception:
-                    pass
-                return False
+        except Exception as e:
+            logger.error(f"Error connecting user {user_id} to WebSocket: {e}", exc_info=True)
+            # Увеличиваем счетчик попыток
+            self.increment_reconnect_attempts("user", user_id)
+            try:
+                await notify_component_error("Вебсокет менеджере", f"Ошибка подключения пользователя {user_id}: {e}")
+            except Exception:
+                pass
+            return False
         finally:
             # Всегда убираем из списка переподключающихся
             self.reconnecting_users.discard(user_id)
