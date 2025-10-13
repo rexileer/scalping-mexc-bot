@@ -70,6 +70,18 @@ async def _reconcile_user_orders(user: User) -> None:
                             order_id, symbol, api_status, user_id=user.telegram_id
                         )
                 except Exception as e:
+                    # Проверяем, является ли ошибка "Order does not exist" (-2013)
+                    error_str = str(e)
+                    if "-2013" in error_str or "Order does not exist" in error_str:
+                        # Ордер не существует в MEXC, помечаем как отмененный
+                        logger.info(
+                            f"[Reconciler] Order {order_id} does not exist in MEXC, marking as CANCELED for user {user.telegram_id}"
+                        )
+                        await update_order_status(
+                            order_id, symbol, "CANCELED", user_id=user.telegram_id
+                        )
+                        continue  # Переходим к следующему ордеру
+                    
                     # Retry once with local timestamp fallback
                     try:
                         setattr(client, "_time_offset_ms", 0)
@@ -81,9 +93,20 @@ async def _reconcile_user_orders(user: User) -> None:
                                 order_id, symbol, api_status, user_id=user.telegram_id
                             )
                     except Exception as e2:
-                        logger.warning(
-                            f"[Reconciler] query_order failed for {order_id} (user {user.telegram_id}): {e2}"
-                        )
+                        # Проверяем, является ли ошибка "Order does not exist" (-2013)
+                        error_str2 = str(e2)
+                        if "-2013" in error_str2 or "Order does not exist" in error_str2:
+                            # Ордер не существует в MEXC, помечаем как отмененный
+                            logger.info(
+                                f"[Reconciler] Order {order_id} does not exist in MEXC (retry), marking as CANCELED for user {user.telegram_id}"
+                            )
+                            await update_order_status(
+                                order_id, symbol, "CANCELED", user_id=user.telegram_id
+                            )
+                        else:
+                            logger.warning(
+                                f"[Reconciler] query_order failed for {order_id} (user {user.telegram_id}): {e2}"
+                            )
 
     except Exception as e:
         logger.error(

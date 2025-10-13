@@ -39,10 +39,13 @@ class MexcWebSocketManager:
         self.bookticker_callbacks: Dict[str, List[Callable]] = {}  # {symbol: [callbacks for bid/ask]}
         self.current_bookticker: Dict[str, Dict] = {}  # {symbol: {'bid_price': x, 'ask_price': y, 'bid_qty': z, 'ask_qty': w}}
         self.reconnect_delay = 1  # Initial reconnect delay in seconds
+        self.max_reconnect_delay = 60  # Maximum reconnect delay in seconds
         self.is_shutting_down = False
         self.reconnecting_users = set()  # Set to track users currently in reconnection process
         self.market_connection_lock = asyncio.Lock()  # Блокировка для market connection
         self.market_listener_active = False  # Флаг активного listener
+        self.market_reconnect_attempts = 0  # Счетчик попыток переподключения market
+        self.user_reconnect_attempts = {}  # Счетчик попыток переподключения для каждого пользователя
         # Трекер направления цены (рост/падение)
         self.direction_tracker = PriceDirectionTracker(max_history_size=100)
 
@@ -225,6 +228,45 @@ class MexcWebSocketManager:
         """
         return self.direction_tracker.get(symbol)
 
+    def get_reconnect_delay(self, connection_type: str = "market", user_id: int = None) -> float:
+        """
+        Вычисляет задержку для переподключения с exponential backoff.
+        
+        Args:
+            connection_type: "market" или "user"
+            user_id: ID пользователя для user connections
+            
+        Returns:
+            Задержка в секундах
+        """
+        if connection_type == "market":
+            attempts = self.market_reconnect_attempts
+        else:
+            attempts = self.user_reconnect_attempts.get(user_id, 0)
+        
+        # Exponential backoff: delay = min(1 * 2^attempts, max_delay)
+        delay = min(self.reconnect_delay * (2 ** attempts), self.max_reconnect_delay)
+        
+        # Добавляем небольшую случайную задержку для избежания thundering herd
+        import random
+        jitter = random.uniform(0.1, 0.5)
+        
+        return delay + jitter
+
+    def reset_reconnect_attempts(self, connection_type: str = "market", user_id: int = None):
+        """Сбрасывает счетчик попыток переподключения при успешном соединении."""
+        if connection_type == "market":
+            self.market_reconnect_attempts = 0
+        else:
+            self.user_reconnect_attempts[user_id] = 0
+
+    def increment_reconnect_attempts(self, connection_type: str = "market", user_id: int = None):
+        """Увеличивает счетчик попыток переподключения."""
+        if connection_type == "market":
+            self.market_reconnect_attempts += 1
+        else:
+            self.user_reconnect_attempts[user_id] = self.user_reconnect_attempts.get(user_id, 0) + 1
+
     async def connect_user_data_stream(self, user_id: int) -> bool:
         """Connect to user data stream for a specific user."""
         # Проверяем, не идет ли уже процесс переподключения
@@ -312,15 +354,19 @@ class MexcWebSocketManager:
             await self.subscribe_user_orders(user_id)
 
             logger.info(f"Connected user {user_id} to WebSocket")
+            # Сбрасываем счетчик попыток при успешном подключении
+            self.reset_reconnect_attempts("user", user_id)
             return True
 
-        except Exception as e:
-            logger.error(f"Error connecting user {user_id} to WebSocket: {e}")
-            try:
-                await notify_component_error("Вебсокет менеджере", f"Ошибка подключения пользователя {user_id}: {e}")
-            except Exception:
-                pass
-            return False
+            except Exception as e:
+                logger.error(f"Error connecting user {user_id} to WebSocket: {e}", exc_info=True)
+                # Увеличиваем счетчик попыток
+                self.increment_reconnect_attempts("user", user_id)
+                try:
+                    await notify_component_error("Вебсокет менеджере", f"Ошибка подключения пользователя {user_id}: {e}")
+                except Exception:
+                    pass
+                return False
         finally:
             # Всегда убираем из списка переподключающихся
             self.reconnecting_users.discard(user_id)
@@ -409,10 +455,14 @@ class MexcWebSocketManager:
                     asyncio.create_task(self._listen_market_messages())
 
                 logger.info("Connected to market data WebSocket")
+                # Сбрасываем счетчик попыток при успешном подключении
+                self.reset_reconnect_attempts("market")
                 return True
 
             except Exception as e:
-                logger.error(f"Error connecting to market data WebSocket: {e}")
+                logger.error(f"Error connecting to market data WebSocket: {e}", exc_info=True)
+                # Увеличиваем счетчик попыток
+                self.increment_reconnect_attempts("market")
                 try:
                     await notify_component_error("вебсокетах (рынок)", f"Ошибка подключения: {e}")
                 except Exception:
@@ -673,7 +723,11 @@ class MexcWebSocketManager:
                     if ws and ws.closed:
                         logger.warning("Market WebSocket is closed, reconnecting...")
                         await self.disconnect_market()
-                        await asyncio.sleep(2)
+                        
+                        # Используем exponential backoff для задержки
+                        delay = self.get_reconnect_delay("market")
+                        logger.info(f"Waiting {delay:.1f}s before market reconnection attempt {self.market_reconnect_attempts + 1}")
+                        await asyncio.sleep(delay)
 
                         if market_failure_count < max_failures:
                             success = await self.connect_market_data()
@@ -716,7 +770,12 @@ class MexcWebSocketManager:
                     if last_message_at and (current_time - last_message_at) > 180:
                         logger.info(f"User {user_id} WS inactive for {(current_time - last_message_at):.0f}s, reconnecting...")
                         await self.disconnect_user(user_id)
-                        await asyncio.sleep(1)
+                        
+                        # Используем exponential backoff для задержки
+                        delay = self.get_reconnect_delay("user", user_id)
+                        logger.info(f"Waiting {delay:.1f}s before user {user_id} reconnection attempt {self.user_reconnect_attempts.get(user_id, 0) + 1}")
+                        await asyncio.sleep(delay)
+                        
                         await self.connect_user_data_stream(user_id)
                         continue
 
@@ -746,34 +805,71 @@ class MexcWebSocketManager:
 
     async def get_connection_stats(self):
         """Get statistics about current connections."""
+        current_time = time.time()
+        
         stats = {
             'user_connections': len(self.user_connections),
             'market_connection': self.market_connection is not None,
             'ping_tasks': len(self.ping_tasks),
-            'reconnecting_users': len(self.reconnecting_users)
+            'reconnecting_users': len(self.reconnecting_users),
+            'market_reconnect_attempts': self.market_reconnect_attempts,
+            'user_reconnect_attempts': dict(self.user_reconnect_attempts),
+            'market_listener_active': self.market_listener_active
         }
 
-        # Подсчитываем активные сессии
+        # Подсчитываем активные сессии и их состояние
         session_count = 0
         closed_sessions = 0
+        healthy_connections = 0
+        unhealthy_connections = 0
 
-        for connection_data in self.user_connections.values():
+        for user_id, connection_data in self.user_connections.items():
             if 'session' in connection_data:
                 if connection_data['session'].closed:
                     closed_sessions += 1
+                    unhealthy_connections += 1
                 else:
                     session_count += 1
+                    # Проверяем WebSocket состояние
+                    ws = connection_data.get('ws')
+                    if ws and not ws.closed:
+                        healthy_connections += 1
+                    else:
+                        unhealthy_connections += 1
+                        
+            # Добавляем информацию о возрасте соединения
+            created_at = connection_data.get('created_at', 0)
+            age_seconds = current_time - created_at if created_at > 0 else 0
+            connection_data['age_seconds'] = age_seconds
 
         if self.market_connection and 'session' in self.market_connection:
             if self.market_connection['session'].closed:
                 closed_sessions += 1
+                unhealthy_connections += 1
             else:
                 session_count += 1
+                # Проверяем WebSocket состояние
+                ws = self.market_connection.get('ws')
+                if ws and not ws.closed:
+                    healthy_connections += 1
+                else:
+                    unhealthy_connections += 1
 
         stats['active_sessions'] = session_count
         stats['closed_sessions'] = closed_sessions
+        stats['healthy_connections'] = healthy_connections
+        stats['unhealthy_connections'] = unhealthy_connections
         stats['total_market_subscriptions'] = len(self.market_subscriptions)
         stats['total_bookticker_subscriptions'] = len(self.bookticker_subscriptions)
+        
+        # Добавляем информацию о состоянии market connection
+        if self.market_connection:
+            created_at = self.market_connection.get('created_at', 0)
+            stats['market_connection_age'] = current_time - created_at if created_at > 0 else 0
+            stats['market_ws_closed'] = self.market_connection.get('ws', {}).closed if 'ws' in self.market_connection else True
+        else:
+            stats['market_connection_age'] = 0
+            stats['market_ws_closed'] = True
 
         return stats
 
@@ -848,24 +944,48 @@ class MexcWebSocketManager:
 
     async def health_check(self):
         """Perform health check on all connections."""
+        current_time = time.time()
         health_stats = {
             'healthy_user_connections': 0,
             'unhealthy_user_connections': 0,
             'market_connection_healthy': False,
             'total_sessions': 0,
-            'issues': []
+            'issues': [],
+            'reconnect_attempts': {
+                'market': self.market_reconnect_attempts,
+                'users': dict(self.user_reconnect_attempts)
+            },
+            'connection_ages': {},
+            'last_message_times': {}
         }
 
         # Check user connections
         for user_id, connection_data in self.user_connections.items():
             ws = connection_data.get('ws')
             session = connection_data.get('session')
+            created_at = connection_data.get('created_at', 0)
+            last_message_at = connection_data.get('last_message_at', 0)
+            
+            connection_age = current_time - created_at if created_at > 0 else 0
+            time_since_last_message = current_time - last_message_at if last_message_at > 0 else 0
+            
+            health_stats['connection_ages'][user_id] = connection_age
+            health_stats['last_message_times'][user_id] = time_since_last_message
 
             if ws and not ws.closed and session and not session.closed:
                 health_stats['healthy_user_connections'] += 1
+                
+                # Проверяем, не слишком ли давно было последнее сообщение
+                if last_message_at > 0 and time_since_last_message > 300:  # 5 минут
+                    health_stats['issues'].append(f"User {user_id} - no messages for {time_since_last_message:.0f}s")
             else:
                 health_stats['unhealthy_user_connections'] += 1
-                health_stats['issues'].append(f"User {user_id} has unhealthy connection")
+                issues = []
+                if not ws or ws.closed:
+                    issues.append("WebSocket closed")
+                if not session or session.closed:
+                    issues.append("Session closed")
+                health_stats['issues'].append(f"User {user_id} has unhealthy connection: {', '.join(issues)}")
 
             if session:
                 health_stats['total_sessions'] += 1
@@ -874,14 +994,33 @@ class MexcWebSocketManager:
         if self.market_connection:
             ws = self.market_connection.get('ws')
             session = self.market_connection.get('session')
+            created_at = self.market_connection.get('created_at', 0)
+            
+            connection_age = current_time - created_at if created_at > 0 else 0
+            health_stats['market_connection_age'] = connection_age
 
             if ws and not ws.closed and session and not session.closed:
                 health_stats['market_connection_healthy'] = True
             else:
-                health_stats['issues'].append("Market connection is unhealthy")
+                issues = []
+                if not ws or ws.closed:
+                    issues.append("WebSocket closed")
+                if not session or session.closed:
+                    issues.append("Session closed")
+                health_stats['issues'].append(f"Market connection is unhealthy: {', '.join(issues)}")
 
             if session:
                 health_stats['total_sessions'] += 1
+        else:
+            health_stats['issues'].append("No market connection established")
+
+        # Проверяем, не слишком ли много попыток переподключения
+        if self.market_reconnect_attempts > 5:
+            health_stats['issues'].append(f"Market connection has {self.market_reconnect_attempts} failed reconnection attempts")
+            
+        for user_id, attempts in self.user_reconnect_attempts.items():
+            if attempts > 5:
+                health_stats['issues'].append(f"User {user_id} has {attempts} failed reconnection attempts")
 
         return health_stats
 

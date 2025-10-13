@@ -912,14 +912,24 @@ async def periodic_resource_check(telegram_id: int):
             user = await sync_to_async(User.objects.get)(telegram_id=telegram_id)
             symbol = user.pair.replace("/", "")
 
+            # Проверяем market connection с блокировкой для предотвращения множественных попыток
             if not websocket_manager.market_connection:
-                logger.warning(f"Соединение с WebSocket для рынка потеряно, переподключаемся")
-                success = await websocket_manager.connect_market_data()
-                if not success:
-                    logger.error(f"Не удалось переподключиться к market WebSocket для {telegram_id}")
-                    return
+                # Проверяем, не идет ли уже процесс переподключения
+                if not hasattr(websocket_manager, '_market_reconnecting'):
+                    websocket_manager._market_reconnecting = True
+                    try:
+                        logger.warning(f"Соединение с WebSocket для рынка потеряно, переподключаемся")
+                        success = await websocket_manager.connect_market_data()
+                        if not success:
+                            logger.error(f"Не удалось переподключиться к market WebSocket для {telegram_id}")
+                            return
+                    finally:
+                        websocket_manager._market_reconnecting = False
+                else:
+                    logger.debug(f"Market WebSocket reconnection already in progress, skipping")
 
-            if symbol not in websocket_manager.market_subscriptions:
+            # Проверяем подписку только если соединение активно
+            if websocket_manager.market_connection and symbol not in websocket_manager.market_subscriptions:
                 logger.warning(f"Подписка на {symbol} отсутствует, переподписываемся")
                 success = await websocket_manager.subscribe_market_data([symbol])
                 if not success:
