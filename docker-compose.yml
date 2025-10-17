@@ -11,6 +11,11 @@ services:
     networks:
       - scalping_network
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"       # максимум 10 МБ на файл
+        max-file: "3"         # хранить 3 файла по 30 МБ = максимум 90 МБ
 
   scalpingweb:
     build: .
@@ -27,6 +32,11 @@ services:
     networks:
       - scalping_network
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   scalpingbot:
     build: .
@@ -41,7 +51,11 @@ services:
     networks:
       - scalping_network
     restart: unless-stopped
-
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "30m"
+        max-file: "3"
 
 networks:
   scalping_network:
